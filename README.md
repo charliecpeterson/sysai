@@ -7,8 +7,8 @@ Install once per machine (or once per shared filesystem). Works everywhere your 
 ## Quick start
 
 ```bash
-git clone https://github.com/you/sysai && cd sysai
-bash install.sh        # installs binary, configures provider, adds shell integration
+git clone https://github.com/charliecpeterson/sysai && cd sysai
+node main.js install   # installs to ~/.sysai, configures provider, adds shell integration
 source ~/.bashrc       # or ~/.zshrc
 ```
 
@@ -48,7 +48,7 @@ Press Enter to approve, `n` to reject, or `e` to edit the command before running
 ai-pane
 ```
 
-Interactive session with multi-session history. On startup, offers to resume your last session.
+Interactive session with multi-session history. On startup, offers to resume your last session. If inside tmux, opens a side pane; otherwise runs inline.
 
 #### Session management
 
@@ -189,9 +189,10 @@ Plus one line added to `~/.bashrc` or `~/.zshrc`:
 ### CLI commands
 
 ```
+sysai install         — set up ~/.sysai, shell integration, and provider
 sysai ask <question>  — one-shot agentic query (used by ? shell function)
 sysai repl            — interactive REPL (used by ai-pane)
-sysai setup           — configure provider and API key
+sysai setup           — reconfigure provider and API key
 sysai --setup-shell   — write shell.bash and print source line
 sysai --version       — print version
 ```
@@ -219,7 +220,7 @@ Outputs self-contained binaries to `dist/sysai-{darwin,linux}-{x64,arm64}`. The 
 
 ```
 sysai/
-├── main.js          ← entry point + setup command
+├── main.js          ← entry point + install/setup commands
 ├── cli.js           ← one-shot ? query (agentic)
 ├── server.js        ← interactive REPL with session management
 ├── agent.js         ← agentic loop: streamText → tool calls → approval → execute
@@ -228,8 +229,9 @@ sysai/
 ├── prompt.js        ← system prompt + instructions.md loader
 ├── history.js       ← session-based conversation history
 ├── config.js        ← loads ~/.sysai/config into env
+├── ai-pane          ← tmux pane launcher (splits or runs inline)
 ├── shell.bash       ← shell integration (? and ai-pane functions)
-├── install.sh       ← interactive installer
+├── install.sh       ← bash installer (alternative to sysai install)
 └── build.sh         ← cross-compile via bun
 ```
 
