@@ -1,0 +1,24 @@
+{
+  "name": "sysai",
+  "version": "0.1.0",
+  "description": "Terminal-native sysadmin AI assistant — works over any SSH session",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "install-shell": "bash install.sh",
+    "build": "bash build.sh",
+    "build:local": "bun build --compile --minify main.js --outfile dist/sysai-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+  },
+  "bin": {
+    "sysai": "./main.js"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.63",
+    "@ai-sdk/openai": "^3.0.47",
+    "ai": "^6.0.134",
+    "zod": "^4.3.6"
+  }
+}
