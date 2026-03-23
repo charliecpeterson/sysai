@@ -26,9 +26,13 @@ The shell inherits the full environment (PATH, SSH context, env vars, etc.).`,
   }),
 
   read_file: tool({
-    description: 'Read a file. Prefer bash for large files or when you need line numbers.',
+    description: `Read a file. Every response includes total line count so you can plan follow-up reads.
+For large files, use offset + limit to read in chunks — start with the first chunk to understand structure,
+then request specific sections based on what you find. Never assume truncated output contains everything relevant.`,
     inputSchema: z.object({
-      path: z.string().describe('Absolute or relative file path'),
+      path:   z.string().describe('Absolute or relative file path'),
+      offset: z.number().optional().describe('Start line, 1-indexed (default: 1)'),
+      limit:  z.number().optional().describe('Number of lines to read (default: all)'),
     }),
   }),
 
@@ -52,26 +56,39 @@ The shell inherits the full environment (PATH, SSH context, env vars, etc.).`,
  * @param {function} [opts.onToolResult]   — (toolCall, result: string) => void
  * @returns {Promise<{text: string, messages: Array}>}
  */
-export async function runAgent({ systemPrompt, messages, onToken, onToolApproval, onToolResult }) {
+export async function runAgent({ systemPrompt, messages, onToken, onToolApproval, onToolResult, onThinking, onThinkingDone, abortSignal }) {
   const model   = getModel()
   const history = [...messages]
   let fullText  = ''
   let iterations = 0
 
   while (iterations++ < MAX_ITERATIONS) {
+    onThinking?.()
+    let thinkingDone = false
+
     const result = streamText({
       model,
       system:   systemPrompt,
       messages: history,
       tools:    TOOLS,
+      ...(abortSignal && { abortSignal }),
     })
 
-    // Stream text as it arrives
-    for await (const textChunk of result.textStream) {
-      if (!textChunk) continue
-      fullText += textChunk
-      onToken(textChunk)
+    try {
+      // Stream text as it arrives
+      for await (const textChunk of result.textStream) {
+        if (!textChunk) continue
+        if (!thinkingDone) { thinkingDone = true; onThinkingDone?.() }
+        fullText += textChunk
+        onToken(textChunk)
+      }
+    } catch (err) {
+      if (!thinkingDone) onThinkingDone?.()   // always clear spinner on abort/error
+      throw err
     }
+
+    // No text tokens — pure tool-call turn: clear spinner before approval prompts
+    if (!thinkingDone) { thinkingDone = true; onThinkingDone?.() }
 
     // Collect results once streaming is done
     const [finishReason, toolCalls, response] = await Promise.all([
@@ -128,8 +145,9 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
           ? call
           : { ...call, input: { command: decision } }
 
+        const t0 = Date.now()
         resultContent = await executeTool(finalCall)
-        onToolResult?.(finalCall, resultContent)
+        onToolResult?.(finalCall, resultContent, Date.now() - t0)
       }
 
       // AI SDK v6: tool results use `output: { type, value }` not `result`
@@ -163,9 +181,28 @@ async function executeTool(call) {
       if (!args.path) return 'Error: no path provided'
       try {
         const content = readFileSync(args.path, 'utf8')
-        return content.length > MAX_FILE_READ
-          ? content.slice(0, MAX_FILE_READ) + '\n[... truncated ...]'
-          : content
+        const allLines = content.split('\n')
+        const totalLines = allLines.length
+
+        const start  = Math.max(0, (args.offset ?? 1) - 1)
+        const count  = args.limit ?? totalLines
+        const slice  = allLines.slice(start, start + count)
+        const end    = start + slice.length
+
+        const header = `[${args.path} — lines ${start + 1}–${end} of ${totalLines.toLocaleString()} total]`
+        const body   = slice.join('\n')
+
+        // Warn if a single chunk is still very large
+        const combined = header + '\n' + body
+        if (combined.length > MAX_FILE_READ) {
+          const half = MAX_FILE_READ / 2
+          return (
+            combined.slice(0, half) +
+            `\n\n[... chunk too large, ${(combined.length - MAX_FILE_READ).toLocaleString()} chars omitted — use a smaller limit ...]\n\n` +
+            combined.slice(-half)
+          )
+        }
+        return combined
       } catch (err) {
         return `Error: ${err.message}`
       }
@@ -186,6 +223,10 @@ async function executeTool(call) {
   }
 }
 
+const MAX_DISPLAY_LINES = 10
+const MAX_BASH_OUTPUT   = 20_000   // chars sent to AI
+const DIM = '\x1b[2m', RESET = '\x1b[0m'
+
 function executeBash(command) {
   return new Promise((resolve) => {
     const shell = process.env.SHELL || 'bash'
@@ -195,22 +236,34 @@ function executeBash(command) {
     })
 
     let output = ''
-
-    proc.stdout.on('data', (data) => {
-      const text = data.toString()
-      output += text
-      process.stdout.write(text)
-    })
-
-    proc.stderr.on('data', (data) => {
-      const text = data.toString()
-      output += text
-      process.stderr.write(text)
-    })
+    proc.stdout.on('data', (data) => { output += data.toString() })
+    proc.stderr.on('data', (data) => { output += data.toString() })
 
     proc.on('close', (code) => {
       const tail = code !== 0 ? `\n[exit ${code}]` : ''
-      resolve((output + tail).trim() || '(no output)')
+      const full = (output + tail).trim() || '(no output)'
+
+      if (process.stdout.isTTY) {
+        const lines = full.split('\n')
+        if (lines.length <= MAX_DISPLAY_LINES) {
+          process.stdout.write(full + '\n')
+        } else {
+          process.stdout.write(lines.slice(0, MAX_DISPLAY_LINES).join('\n') + '\n')
+          process.stdout.write(`${DIM}  … ${lines.length - MAX_DISPLAY_LINES} more lines${RESET}\n`)
+        }
+      }
+
+      // Cap what the AI receives — keep start + end so headers and recent output are both preserved
+      if (full.length > MAX_BASH_OUTPUT) {
+        const half = MAX_BASH_OUTPUT / 2
+        resolve(
+          full.slice(0, half) +
+          `\n\n[... ${(full.length - MAX_BASH_OUTPUT).toLocaleString()} chars omitted — use grep/tail/awk for targeted output ...]\n\n` +
+          full.slice(-half)
+        )
+      } else {
+        resolve(full)
+      }
     })
 
     proc.on('error', (err) => resolve(`Error: ${err.message}`))

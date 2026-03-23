@@ -13,8 +13,7 @@ export const VERSION = '0.1.0'
 const [, , cmd, ...rest] = process.argv
 
 switch (cmd) {
-  case 'repl':
-  case 'pane':
+  case 'chat':
     await import('./server.js')
     break
 
@@ -31,27 +30,120 @@ switch (cmd) {
     await install()
     break
 
-  case 'setup':
+  case 'setup': {
+    const { setup } = await import('./setup.js')
     await setup()
     break
+  }
+
+  case 'status': {
+    const { status } = await import('./setup.js')
+    await status()
+    break
+  }
+
+  case 'models': {
+    const { listModels } = await import('./setup.js')
+    await listModels()
+    break
+  }
+
+  case 'model': {
+    const { switchModel } = await import('./setup.js')
+    await switchModel(rest[0])
+    break
+  }
+
+  case 'instructions': {
+    const { editInstructions } = await import('./setup.js')
+    await editInstructions()
+    break
+  }
+
+  case 'tasks': {
+    const { listTasksCmd } = await import('./task.js')
+    await listTasksCmd()
+    break
+  }
+
+  case 'task': {
+    const { taskCmd } = await import('./task.js')
+    await taskCmd(rest)
+    break
+  }
 
   case '--setup-shell':
     await setupShell()
     break
 
-  default:
-    // No subcommand — if args given treat as one-shot, otherwise show usage
+  case 'help':
+  case '--help':
+  case '-h':
+    printHelp()
+    break
+
+  default: {
+    // Check if cmd matches a saved task
+    if (cmd) {
+      const { loadTask, runTaskCmd } = await import('./task.js')
+      const task = loadTask(cmd)
+      if (task) {
+        const dryRun = rest.includes('--dry-run')
+        await runTaskCmd(task, { dryRun })
+        break
+      }
+    }
+    // No subcommand — if args given treat as one-shot question, otherwise show help
     if (process.argv.length > 2) {
       await import('./cli.js')
     } else {
-      console.error('Usage:')
-      console.error('  sysai repl            — start interactive AI assistant')
-      console.error('  sysai ask <question>  — one-shot query')
-      console.error('  sysai install         — set up ~/.sysai, shell integration, and provider')
-      console.error('  sysai setup           — reconfigure provider and API key')
-      console.error('  sysai --version       — print version')
+      printHelp()
       process.exit(1)
     }
+  }
+}
+
+function printHelp() {
+  const DIM = '\x1b[2m', RESET = '\x1b[0m', CYAN = '\x1b[36m', BOLD = '\x1b[1m'
+  process.stdout.write(`\n  ${CYAN}${BOLD}sysai${RESET} v${VERSION} — terminal AI assistant\n\n`)
+  process.stdout.write(`  ${BOLD}Usage:${RESET}  sysai <command> [args]\n\n`)
+
+  const sections = [
+    ['Chat', [
+      ['chat',               'Start interactive AI assistant (tmux split pane)'],
+      ['ask <question>',     'One-shot query  (also: ? <question>)'],
+    ]],
+    ['Models', [
+      ['models',             'List configured models in a table'],
+      ['model [name]',       'Switch active model (interactive if no name given)'],
+      ['status',             'Show all models with live health check'],
+      ['setup',              'Add / remove / configure model providers'],
+    ]],
+    ['Tasks', [
+      ['tasks',              'List all saved tasks'],
+      ['<taskname>',         'Run a saved task'],
+      ['task new',           'Create a task with AI assistance'],
+      ['task test <name>',   'Dry-run a task — show commands then AI analysis'],
+      ['task edit <name>',   'Open task file in $EDITOR'],
+      ['task rm <name>',     'Delete a task'],
+    ]],
+    ['Config', [
+      ['instructions',       'Edit ~/.sysai/instructions.md (injected into every query)'],
+      ['install',            'Set up ~/.sysai, shell integration, and provider'],
+    ]],
+    ['Other', [
+      ['help',               'Show this help'],
+      ['--version',          'Print version'],
+    ]],
+  ]
+
+  for (const [section, rows] of sections) {
+    process.stdout.write(`  ${DIM}── ${section}${RESET}\n`)
+    for (const [cmd, desc] of rows) {
+      process.stdout.write(`    ${CYAN}sysai ${cmd.padEnd(22)}${RESET}  ${desc}\n`)
+    }
+    process.stdout.write('\n')
+  }
 }
 
 async function install() {
@@ -105,6 +197,15 @@ async function install() {
       symlinkSync(mainJs, binPath)
       chmodSync(mainJs, 0o755)
       process.stdout.write(`${GREEN}  ✓${RESET} Linked ~/.sysai/bin/sysai → ${mainJs}\n`)
+
+      // Install npm dependencies if needed
+      const nmPath = join(srcDir, 'node_modules')
+      const { existsSync: exists } = await import('fs')
+      if (!exists(nmPath)) {
+        process.stdout.write(`${DIM}  Installing dependencies...${RESET}`)
+        execSync('npm install --silent', { cwd: srcDir })
+        process.stdout.write(`\r${GREEN}  ✓${RESET} Dependencies installed          \n`)
+      }
     }
   }
 
@@ -126,7 +227,6 @@ async function install() {
       '# sysai shell integration — managed by sysai, do not edit manually',
       'SYSAI_BIN="$HOME/.sysai/bin/sysai"',
       '? () { if [ -t 0 ]; then "$SYSAI_BIN" ask "$@"; else cat | "$SYSAI_BIN" ask "$@"; fi; }',
-      'ai-pane () { "$SYSAI_BIN" repl; }',
     ].join('\n') + '\n'
   }
   writeFileSync(`${dir}/shell.bash`, shellContent, { mode: 0o644 })
@@ -153,130 +253,36 @@ async function install() {
     process.stdout.write(`${GREEN}  ✓${RESET} Added source line to ${rcFile}\n`)
   }
 
-  // 6. Run setup if no config exists
+  // 6. Copy built-in tasks (skip if user already has one with the same name)
+  const tasksDir  = `${dir}/tasks`
+  const srcTasks  = join(srcDir, 'tasks')
+  mkdirSync(tasksDir, { recursive: true })
+  if (existsSync(srcTasks)) {
+    const { readdirSync } = await import('fs')
+    let copied = 0
+    for (const f of readdirSync(srcTasks).filter(f => f.endsWith('.md'))) {
+      const dest = join(tasksDir, f)
+      if (!existsSync(dest)) {
+        copyFileSync(join(srcTasks, f), dest)
+        copied++
+      }
+    }
+    if (copied > 0)
+      process.stdout.write(`${GREEN}  ✓${RESET} Installed ${copied} built-in task(s) to ~/.sysai/tasks/\n`)
+  }
+
+  // 7. Run setup if no config exists
   process.stdout.write('\n')
-  if (existsSync(`${dir}/config`)) {
+  if (existsSync(`${dir}/models.json`) || existsSync(`${dir}/config`)) {
     process.stdout.write(`${GREEN}  ✓${RESET} Config already exists\n\n`)
     process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n`)
     process.stdout.write(`  To reconfigure: ${CYAN}sysai setup${RESET}\n\n`)
   } else {
     process.stdout.write(`${DIM}  Now let's configure your AI provider:${RESET}\n\n`)
+    const { setup } = await import('./setup.js')
     await setup()
     process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n\n`)
   }
-}
-
-async function setup() {
-  const readline = await import('readline')
-  const { writeFileSync, readFileSync, mkdirSync, existsSync, chmodSync } = await import('fs')
-  const { homedir } = await import('os')
-
-  const dir = `${homedir()}/.sysai`
-  const configPath = `${dir}/config`
-  mkdirSync(dir, { recursive: true })
-
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', GREEN = '\x1b[32m', RED = '\x1b[31m', CYAN = '\x1b[36m', YELLOW = '\x1b[33m'
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const ask = (q) => new Promise(resolve => rl.question(q, resolve))
-
-  // Show current config if exists
-  if (existsSync(configPath)) {
-    try {
-      const current = readFileSync(configPath, 'utf8')
-      const provider = current.match(/^SYSAI_PROVIDER=(.+)$/m)?.[1]
-      const model = current.match(/^SYSAI_MODEL=(.+)$/m)?.[1]
-      const hasKey = /API_KEY=.+/.test(current)
-      const baseURL = current.match(/^SYSAI_BASE_URL=(.+)$/m)?.[1]
-      process.stdout.write(`\n${DIM}Current config:${RESET}\n`)
-      process.stdout.write(`  provider: ${provider || '(none)'}\n`)
-      if (model) process.stdout.write(`  model:    ${model}\n`)
-      if (hasKey) process.stdout.write(`  api key:  ${DIM}configured${RESET}\n`)
-      if (baseURL) process.stdout.write(`  base url: ${baseURL}\n`)
-      process.stdout.write('\n')
-    } catch {}
-  }
-
-  process.stdout.write(`  Which AI provider?\n\n`)
-  process.stdout.write(`    1) Anthropic  ${DIM}(Claude)${RESET}\n`)
-  process.stdout.write(`    2) OpenAI     ${DIM}(GPT-4o, o3, etc.)${RESET}\n`)
-  process.stdout.write(`    3) Local      ${DIM}(llama.cpp, Ollama, or any OpenAI-compatible endpoint)${RESET}\n\n`)
-
-  const choice = (await ask('  Choose [1/2/3]: ')).trim()
-
-  const config = {}
-
-  switch (choice) {
-    case '1':
-      config.SYSAI_PROVIDER = 'anthropic'
-      config.ANTHROPIC_API_KEY = (await ask('  Anthropic API key: ')).trim()
-      if (!config.ANTHROPIC_API_KEY) { process.stdout.write(`${RED}  No API key provided.${RESET}\n`); rl.close(); return }
-      const aBase = (await ask(`  Base URL ${DIM}(Enter for default)${RESET}: `)).trim()
-      if (aBase) config.ANTHROPIC_BASE_URL = aBase
-      const aModel = (await ask(`  Model ${DIM}(Enter for claude-sonnet-4-6)${RESET}: `)).trim()
-      if (aModel) config.SYSAI_MODEL = aModel
-      break
-
-    case '2':
-      config.SYSAI_PROVIDER = 'openai'
-      config.OPENAI_API_KEY = (await ask('  OpenAI API key: ')).trim()
-      if (!config.OPENAI_API_KEY) { process.stdout.write(`${RED}  No API key provided.${RESET}\n`); rl.close(); return }
-      const oBase = (await ask(`  Base URL ${DIM}(Enter for default)${RESET}: `)).trim()
-      if (oBase) config.OPENAI_BASE_URL = oBase
-      const oModel = (await ask(`  Model ${DIM}(Enter for gpt-4o)${RESET}: `)).trim()
-      if (oModel) config.SYSAI_MODEL = oModel
-      break
-
-    case '3':
-      config.SYSAI_PROVIDER = 'llamacpp'
-      config.SYSAI_BASE_URL = (await ask('  Base URL (e.g. http://localhost:11434/v1): ')).trim()
-      if (!config.SYSAI_BASE_URL) { process.stdout.write(`${RED}  No base URL provided.${RESET}\n`); rl.close(); return }
-      const lKey = (await ask(`  API key ${DIM}(Enter to skip)${RESET}: `)).trim()
-      if (lKey) config.SYSAI_API_KEY = lKey
-      const lModel = (await ask(`  Model name ${DIM}(Enter for default)${RESET}: `)).trim()
-      if (lModel) config.SYSAI_MODEL = lModel
-      break
-
-    default:
-      process.stdout.write(`${RED}  Invalid choice.${RESET}\n`)
-      rl.close()
-      return
-  }
-
-  // Write config
-  const configContent = Object.entries(config).map(([k, v]) => `${k}=${v}`).join('\n') + '\n'
-  writeFileSync(configPath, configContent, { mode: 0o600 })
-  process.stdout.write(`\n${GREEN}  ✓${RESET} Config saved to ~/.sysai/config\n`)
-
-  // Health check
-  process.stdout.write(`${DIM}  Testing connection...${RESET}`)
-
-  // Load the new config into env
-  for (const [k, v] of Object.entries(config)) {
-    process.env[k] = v
-  }
-
-  try {
-    const { generateText } = await import('ai')
-    const { getModel } = await import('./provider.js')
-    const model = getModel()
-    const { text } = await generateText({
-      model,
-      prompt: 'Reply with exactly: ok',
-      maxTokens: 10,
-    })
-    if (text.toLowerCase().includes('ok')) {
-      process.stdout.write(`\r${GREEN}  ✓ Connection works!${RESET}          \n\n`)
-    } else {
-      process.stdout.write(`\r${GREEN}  ✓ Got response: ${text.slice(0, 30)}${RESET}          \n\n`)
-    }
-  } catch (err) {
-    const msg = err.message || String(err)
-    process.stdout.write(`\r${RED}  ✗ Connection failed: ${msg.slice(0, 80)}${RESET}          \n`)
-    process.stdout.write(`${DIM}  Config saved — fix the issue and run 'sysai setup' again.${RESET}\n\n`)
-  }
-
-  rl.close()
 }
 
 async function setupShell() {

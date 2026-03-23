@@ -22,6 +22,14 @@ TOOLS:
 - read_file: for config files you need to reason about fully before editing
 - write_file: for creating or replacing files; prefer bash + sed/awk for targeted edits
 
+HANDLING LARGE FILES AND OUTPUT:
+- Never cat large files — use read_file with offset+limit to read in chunks
+- read_file always returns total line count: use it to decide if you need more chunks
+- Start with the first 200 lines to understand structure, then jump to relevant sections
+- For logs: errors are usually at the end — read the last chunk first, then search middle if needed
+- For bash: use tail/grep/awk/head instead of cat; if output is truncated, run a targeted follow-up
+- If user-piped input looks truncated, say so and ask what section matters most
+
 ENVIRONMENT AWARENESS:
 - RHEL/Rocky/CentOS/Fedora: dnf/rpm, systemctl, journalctl
 - Debian/Ubuntu: apt, systemctl, journalctl

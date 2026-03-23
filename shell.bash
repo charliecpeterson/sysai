@@ -11,4 +11,3 @@ SYSAI_BIN="$HOME/.sysai/bin/sysai"
   fi
 }
 
-ai-pane () { "$SYSAI_BIN" repl; }

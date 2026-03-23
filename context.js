@@ -130,11 +130,23 @@ function getSudoInfo() {
 }
 
 function getTerminalBuffer() {
-  const tmux = process.env.TMUX
-  if (!tmux) return null
+  if (!process.env.TMUX) return null
 
-  // Get the current pane's recent output
-  const result = spawnSync('tmux', ['capture-pane', '-p', '-S', `-${MAX_BUFFER_LINES}`], {
+  // In split mode, capture the work pane not the chat pane
+  let workPane = process.env.SYSAI_WORK_PANE
+  if (!workPane) {
+    // Auto-detect: if there are multiple panes, grab the one that isn't us
+    const currentPane = spawnSync('tmux', ['display-message', '-p', '#{pane_id}'],
+      { encoding: 'utf8', timeout: 1000 }).stdout.trim()
+    const allPanes = spawnSync('tmux', ['list-panes', '-F', '#{pane_id}'],
+      { encoding: 'utf8', timeout: 1000 }).stdout.trim().split('\n').filter(Boolean)
+    if (allPanes.length > 1) workPane = allPanes.find(p => p !== currentPane) || null
+  }
+  const args = workPane
+    ? ['capture-pane', '-p', '-S', `-${MAX_BUFFER_LINES}`, '-t', workPane]
+    : ['capture-pane', '-p', '-S', `-${MAX_BUFFER_LINES}`]
+
+  const result = spawnSync('tmux', args, {
     encoding: 'utf8',
     timeout: 2000,
   })

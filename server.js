@@ -8,22 +8,59 @@
  */
 
 import readline  from 'readline'
+import { spawnSync } from 'child_process'
 import { buildContext }   from './context.js'
-import { buildMessages, SYSTEM_PROMPT } from './prompt.js'
-import { runAgent }       from './agent.js'
+import { buildMessages, getSystemPrompt } from './prompt.js'
+import { makeApproval, runAgentWithUI } from './run.js'
 import {
   createSession, appendTurn, listSessions, loadSession,
   lastSession, deleteSession, migrateOldHistory, pruneHistory,
 } from './history.js'
+import { formatApiError } from './errors.js'
 
 const CYAN   = '\x1b[36m'
 const RESET  = '\x1b[0m'
+const BOLD   = '\x1b[1m'
 const DIM    = '\x1b[2m'
 const YELLOW = '\x1b[33m'
 const RED    = '\x1b[31m'
 const GREEN  = '\x1b[32m'
 
 async function main() {
+  if (!process.argv.includes('--inline')) {
+    const isBundled = !process.argv[1]?.endsWith('.js')
+    const chatCmd = isBundled
+      ? `${process.argv[1]} chat --inline`
+      : `${process.execPath} ${process.argv[1]} chat --inline`
+    const quotedCmd = chatCmd.replace(/'/g, `'\\''`)
+
+    if (process.env.TMUX) {
+      // Already in tmux — split current window
+      const workPane = spawnSync('tmux', ['display-message', '-p', '#{pane_id}'],
+        { encoding: 'utf8' }).stdout.trim()
+      spawnSync('tmux', [
+        'split-window', '-h', '-p', '38',
+        '-e', `SYSAI_WORK_PANE=${workPane}`,
+        chatCmd,
+      ], { stdio: 'inherit' })
+      process.exit(0)
+    }
+
+    const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0
+    if (hasTmux) {
+      // Not in tmux but it's available — start a new session with the split
+      process.stderr.write(`${DIM}  starting tmux…${RESET}\n`)
+      spawnSync('sh', ['-c', [
+        `pane=$(tmux new-session -dPF '#{pane_id}')`,
+        `tmux split-window -h -p 38 -e "SYSAI_WORK_PANE=$pane" '${quotedCmd}'`,
+        `tmux select-pane -t "$pane"`,
+        `tmux attach-session`,
+      ].join(' && ')], { stdio: 'inherit' })
+      process.exit(0)
+    }
+    // No tmux — fall through to inline
+  }
+
   let sessionHistory = []
   let currentSession = null
 
@@ -89,17 +126,27 @@ async function main() {
 
     process.stdout.write('\n')
 
+    activeAbort = new AbortController()
     let fullResponse = ''
     try {
-      const result = await runAgent({
-        systemPrompt: SYSTEM_PROMPT,
+      const result = await runAgentWithUI({
+        systemPrompt:  getSystemPrompt(),
         messages,
-        onToken: (token) => process.stdout.write(token),
-        onToolApproval: (toolUse) => askApproval(toolUse, rl),
+        autoApprove:   false,
+        abortSignal:   activeAbort.signal,
+        rl,
+        contentStream: process.stdout,
+        uiStream:      process.stdout,
       })
       fullResponse = result.text
     } catch (err) {
-      process.stdout.write(`\n${RED}sysai error: ${err.message}${RESET}\n`)
+      if (activeAbort?.signal.aborted) {
+        process.stdout.write(`\n${DIM}  cancelled${RESET}\n`)
+      } else {
+        process.stdout.write(`\n${RED}sysai: ${formatApiError(err)}${RESET}\n`)
+      }
+    } finally {
+      activeAbort = null
     }
 
     process.stdout.write('\n\n')
@@ -107,8 +154,8 @@ async function main() {
     sessionHistory.push({ role: 'user',      content: messages[messages.length - 1].content })
     sessionHistory.push({ role: 'assistant',  content: fullResponse })
 
-    // Keep last 20 turns in memory
-    if (sessionHistory.length > 40) sessionHistory = sessionHistory.slice(-40)
+    const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
+    if (sessionHistory.length > maxTurns * 2) sessionHistory = sessionHistory.slice(-(maxTurns * 2))
 
     if (fullResponse) {
       appendTurn(currentSession, { question, response: fullResponse })
@@ -122,63 +169,21 @@ async function main() {
     process.exit(0)
   })
 
+  let activeAbort = null
+
   process.on('SIGINT', () => {
-    process.stdout.write(`\n${DIM}sysai: use /exit or Ctrl-D to quit.${RESET}\n`)
-    rl.prompt()
-  })
-}
-
-// ── tool approval prompt ──────────────────────────────────────────────────────
-
-function askApproval(toolUse, rl) {
-  return new Promise((resolve) => {
-    const name = toolUse.toolName
-    const raw = toolUse.input ?? toolUse.args
-    const args = typeof raw === 'string'
-      ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
-      : (raw ?? {})
-
-    // Auto-approve reads — no harm
-    if (name === 'read_file') {
-      process.stdout.write(`\n${DIM}  read: ${args.path ?? '?'}${RESET}\n`)
-      return resolve('approved')
+    if (activeAbort) {
+      activeAbort.abort()
+    } else {
+      process.stdout.write(`\n${DIM}  Ctrl-D or /exit to quit${RESET}\n`)
+      rl.prompt()
     }
-
-    process.stdout.write('\n')
-
-    if (name === 'bash') {
-      process.stdout.write(`${YELLOW}  ⚡ bash${RESET}  ${args.command}\n`)
-      rl.question(`${DIM}  run? [Y/n/e(dit)]: ${RESET}`, (answer) => {
-        const a = answer.trim().toLowerCase()
-        if (a === 'n' || a === 'no') return resolve('rejected')
-        if (a === 'e' || a === 'edit') {
-          rl.question(`${DIM}  edit: ${RESET}`, (edited) => {
-            resolve(edited.trim() || 'rejected')
-          })
-          return
-        }
-        resolve('approved')
-      })
-      return
-    }
-
-    if (name === 'write_file') {
-      process.stdout.write(`${RED}  ✎ write${RESET}  ${args.path}\n`)
-      rl.question(`${DIM}  write? [Y/n]: ${RESET}`, (answer) => {
-        const a = answer.trim().toLowerCase()
-        resolve(a === 'n' || a === 'no' ? 'rejected' : 'approved')
-      })
-      return
-    }
-
-    // Unknown tool — approve by default
-    resolve('approved')
   })
 }
 
 // ── slash commands ────────────────────────────────────────────────────────────
 
-function handleCommand(input, history, rl, { getCurrentSession, setSession }) {
+async function handleCommand(input, history, rl, { getCurrentSession, setSession }) {
   const parts = input.split(/\s+/)
   const [cmd, ...args] = parts
 
@@ -272,17 +277,131 @@ function handleCommand(input, history, rl, { getCurrentSession, setSession }) {
       break
     }
 
+    case '/status': {
+      const sess    = getCurrentSession()
+      const turns   = Math.floor(history.length / 2)
+      const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
+      const tokens  = Math.round(
+        history.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 200), 0) / 4
+      )
+      const { existsSync: ex } = await import('fs')
+      const { homedir: hd }    = await import('os')
+      const hasInstr = ex(`${hd()}/.sysai/instructions.md`)
+      process.stdout.write('\n')
+      process.stdout.write(`  ${DIM}provider:${RESET}      ${process.env.SYSAI_PROVIDER || '?'}\n`)
+      process.stdout.write(`  ${DIM}model:${RESET}         ${process.env.SYSAI_MODEL || '(default)'}\n`)
+      process.stdout.write(`  ${DIM}turns:${RESET}         ${turns} / ${maxTurns}\n`)
+      process.stdout.write(`  ${DIM}~tokens:${RESET}       ~${tokens.toLocaleString()}\n`)
+      process.stdout.write(`  ${DIM}instructions:${RESET}  ${hasInstr ? '✓ loaded' : 'none'}\n`)
+      process.stdout.write('\n')
+      break
+    }
+
+    case '/compact': {
+      const KEEP = 6
+      if (history.length <= KEEP * 2) {
+        process.stdout.write(`${DIM}Nothing to compact — only ${Math.floor(history.length / 2)} turns.${RESET}\n`)
+        break
+      }
+      const older  = history.slice(0, history.length - KEEP * 2)
+      const recent = history.slice(-KEEP * 2)
+      process.stdout.write(`${DIM}  Summarising ${Math.floor(older.length / 2)} older turns…${RESET}`)
+      try {
+        const { generateText } = await import('ai')
+        const { getModel }     = await import('./provider.js')
+        const transcript = older.map(m =>
+          `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 600) : '[tool output]'}`
+        ).join('\n')
+        const { text } = await generateText({
+          model:     getModel(),
+          prompt:    `Summarise this conversation concisely. Preserve key facts, commands run, findings, errors, and decisions:\n\n${transcript}`,
+          maxTokens: 600,
+        })
+        const summarised = [
+          { role: 'user',      content: '[Earlier conversation — summarised]' },
+          { role: 'assistant', content: text },
+          ...recent,
+        ]
+        setSession(summarised, getCurrentSession())
+        process.stdout.write(`\r${GREEN}✓${RESET} Compacted to summary + last ${KEEP} turns.${' '.repeat(20)}\n`)
+      } catch (err) {
+        process.stdout.write(`\r${RED}Compact failed: ${formatApiError(err)}${RESET}\n`)
+      }
+      break
+    }
+
+    case '/instructions': {
+      const { existsSync, writeFileSync } = await import('fs')
+      const { spawnSync: sp } = await import('child_process')
+      const { homedir } = await import('os')
+      const ipath = `${homedir()}/.sysai/instructions.md`
+      if (!existsSync(ipath)) {
+        writeFileSync(ipath, '# Machine-specific instructions for sysai\n', 'utf8')
+      }
+      const editor = process.env.VISUAL || process.env.EDITOR || 'vi'
+      sp(editor, [ipath], { stdio: 'inherit' })
+      process.stdout.write(`${DIM}Instructions updated. Changes take effect on next query.${RESET}\n`)
+      break
+    }
+
+    case '/model': {
+      const { loadModels, switchActive } = await import('./models.js')
+      const data = loadModels()
+      const models = data?.models ?? []
+      if (models.length === 0) {
+        process.stdout.write(`${DIM}No models configured. Run: sysai setup${RESET}\n`)
+        break
+      }
+      const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
+      const targetName = args[0]
+      if (targetName) {
+        try {
+          switchActive(targetName)
+          process.stdout.write(`${GREEN}  ✓ Switched to ${BOLD}${targetName}${RESET}\n`)
+        } catch (err) {
+          process.stdout.write(`${RED}  ${err.message}${RESET}\n`)
+        }
+        break
+      }
+      // Interactive picker
+      process.stdout.write('\n')
+      for (let i = 0; i < models.length; i++) {
+        const m = models[i]
+        const active = m.name === data.active ? `  ${GREEN}← active${RESET}` : ''
+        const modelId = m.model || `${DIM}${DEFAULTS[m.provider] ?? '?'}${RESET}`
+        process.stdout.write(`  ${DIM}${i + 1})${RESET}  ${BOLD}${m.name}${RESET}  ${DIM}${m.provider}${RESET}  ${modelId}${active}\n`)
+      }
+      process.stdout.write('\n')
+      const answer = await new Promise(resolve => rl.question(`${DIM}  Switch to (name or number, Enter to cancel): ${RESET}`, resolve))
+      const trimmed = answer.trim()
+      if (!trimmed) break
+      const num = parseInt(trimmed)
+      const name = (!isNaN(num) && num >= 1 && num <= models.length)
+        ? models[num - 1].name : trimmed
+      try {
+        switchActive(name)
+        process.stdout.write(`${GREEN}  ✓ Switched to ${BOLD}${name}${RESET} ${DIM}(takes effect on next query)${RESET}\n`)
+      } catch (err) {
+        process.stdout.write(`${RED}  ${err.message}${RESET}\n`)
+      }
+      break
+    }
+
     case '/help':
       process.stdout.write([
         `${DIM}Commands:${RESET}`,
-        '  /sessions    — list saved sessions',
-        '  /resume N    — resume session N',
-        '  /new         — start a fresh session',
-        '  /delete N    — delete session N',
-        '  /history     — show turns in current session',
-        '  /clear       — clear current conversation',
-        '  /exit        — quit',
-        '  /help        — this message',
+        '  /sessions      — list saved sessions',
+        '  /resume N      — resume session N',
+        '  /new           — start a fresh session',
+        '  /delete N      — delete session N',
+        '  /history       — show turns in current session',
+        '  /clear         — clear current conversation',
+        '  /compact       — summarise older turns to free up context',
+        '  /status        — show token usage and session info',
+        '  /model [name]  — switch active model',
+        '  /instructions  — edit ~/.sysai/instructions.md',
+        '  /exit          — quit',
+        '  /help          — this message',
         '',
       ].join('\n'))
       break
