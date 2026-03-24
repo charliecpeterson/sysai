@@ -13,7 +13,8 @@ import { buildContext }   from './context.js'
 import { buildMessages, getSystemPrompt } from './prompt.js'
 import { runAgentWithUI } from './run.js'
 import { formatApiError } from './errors.js'
-import { DIM, RESET, RED } from './colors.js'
+import { getActiveConfig } from './models.js'
+import { BOLD, DIM, CYAN, RESET, RED } from './colors.js'
 
 async function main() {
   const args        = process.argv.slice(2)
@@ -43,6 +44,11 @@ async function main() {
   const context  = await buildContext({ stdinContent, questionHint: question })
   const messages = buildMessages({ context, question })
 
+  const cfg = getActiveConfig()
+  if (process.stderr.isTTY) {
+    const model = cfg?.name ?? '?'
+    process.stderr.write(`${DIM}  sysai ${CYAN}●${RESET}${DIM} ${model}${RESET}\n`)
+  }
   process.stdout.write('\n')
 
   const abortController = new AbortController()

@@ -264,7 +264,7 @@ export async function taskDesigner() {
       : (raw ?? {})
 
     if (name === 'write_file') {
-      process.stdout.write(`\n${GREEN}  ✎ writing task: ${BOLD}${args.path}${RESET}\n`)
+      process.stdout.write(`\n${GREEN}  ● write  ${BOLD}${args.path}${RESET}\n`)
       return 'approved'
     }
     // For read_file and bash, use the stdout-directed makeApproval

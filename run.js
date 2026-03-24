@@ -31,16 +31,16 @@ export function makeApproval(rl, {
       : (raw ?? {})
 
     if (name === 'read_file') {
-      writeFn(`${DIM}  read: ${args.path ?? '?'}${RESET}\n`)
+      writeFn(`${DIM}  ○ read  ${args.path ?? '?'}${RESET}\n`)
       return 'approved'
     }
 
     if (name === 'bash') {
       if (autoApprove) {
-        writeFn(`\n${YELLOW}  ⚡ bash${RESET}  ${args.command}  ${DIM}(auto)${RESET}\n`)
+        writeFn(`\n${YELLOW}  ● run${RESET}   ${args.command}  ${DIM}(auto)${RESET}\n`)
         return 'approved'
       }
-      writeFn(`\n${YELLOW}  ⚡ bash${RESET}  ${args.command}\n`)
+      writeFn(`\n${YELLOW}  ● run${RESET}   ${args.command}\n`)
       return new Promise((resolve) => {
         rl.question(`${DIM}  run? [Y/n/e(dit)]: ${RESET}`, (answer) => {
           const a = answer.trim().toLowerCase()
@@ -55,7 +55,7 @@ export function makeApproval(rl, {
     }
 
     if (name === 'write_file') {
-      writeFn(`\n${RED}  ✎ write${RESET}  ${args.path}\n`)
+      writeFn(`\n${RED}  ● write${RESET}  ${args.path}\n`)
       renderWriteDiff(args.path, args.content ?? '', (line) => writeFn(line + '\n'))
       if (autoApprove || autoApproveWrite) {
         writeFn(`${DIM}  (auto-approved)${RESET}\n`)

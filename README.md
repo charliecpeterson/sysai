@@ -39,7 +39,7 @@ The `?` command is agentic — the AI runs shell commands (with your approval), 
 
 Tool approval:
 ```
-  ⚡ bash  df -h /scratch
+  ● run   df -h /scratch
   run? [Y/n/e(dit)]:
 ```
 
@@ -47,7 +47,7 @@ Press Enter to approve, `n` to reject, or `e` to edit before running. Use `-y` t
 
 When the AI writes a file, a diff is shown before prompting:
 ```
-  ✎ write  /etc/nginx/nginx.conf
+  ● write  /etc/nginx/nginx.conf
 + server {
 +   listen 443 ssl;
   ...

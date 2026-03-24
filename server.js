@@ -19,6 +19,8 @@ import {
   lastSession, deleteSession, migrateOldHistory, pruneHistory,
 } from './history.js'
 import { formatApiError } from './errors.js'
+import { VERSION } from './version.js'
+import { getActiveConfig } from './models.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 async function main() {
@@ -63,8 +65,13 @@ async function main() {
   migrateOldHistory()
   pruneHistory()
 
-  process.stdout.write(`${DIM}sysai — terminal assistant${RESET}\n`)
-  process.stdout.write(`${DIM}Ctrl-C or /exit to quit  |  /sessions to browse  |  /help for commands${RESET}\n\n`)
+  const cfg = getActiveConfig()
+  const modelLabel = cfg ? `${cfg.name} ${DIM}(${cfg.provider})${RESET}` : `${RED}no model${RESET}`
+
+  process.stdout.write(`\n${CYAN}  ┌─┐${RESET}\n`)
+  process.stdout.write(`${CYAN}  └─┤ ${BOLD}sysai${RESET} ${DIM}v${VERSION}${RESET}\n`)
+  process.stdout.write(`${CYAN}    └─${RESET} ${modelLabel}\n`)
+  process.stdout.write(`\n${DIM}  /help for commands  ·  /sessions to browse  ·  Ctrl-D to quit${RESET}\n\n`)
 
   // Offer to resume last session
   const last = lastSession()
