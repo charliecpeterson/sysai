@@ -58,9 +58,6 @@ export function getSystemPrompt() {
   return BASE_PROMPT + `\n\nUSER INSTRUCTIONS (from ~/.sysai/instructions.md):\n${instructions}`
 }
 
-// For backwards compat — prefer getSystemPrompt()
-export const SYSTEM_PROMPT = getSystemPrompt()
-
 /**
  * Build the messages array for the Claude API call.
  *

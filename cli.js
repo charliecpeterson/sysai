@@ -10,13 +10,10 @@
 import { readFileSync, createReadStream } from 'fs'
 import readline from 'readline'
 import { buildContext }   from './context.js'
-import { buildMessages, SYSTEM_PROMPT } from './prompt.js'
+import { buildMessages, getSystemPrompt } from './prompt.js'
 import { runAgentWithUI } from './run.js'
 import { formatApiError } from './errors.js'
-
-const DIM   = '\x1b[2m'
-const RESET = '\x1b[0m'
-const RED   = '\x1b[31m'
+import { DIM, RESET, RED } from './colors.js'
 
 async function main() {
   const args        = process.argv.slice(2)
@@ -53,7 +50,7 @@ async function main() {
 
   try {
     await runAgentWithUI({
-      systemPrompt:  SYSTEM_PROMPT,
+      systemPrompt:  getSystemPrompt(),
       messages,
       autoApprove,
       abortSignal:   abortController.signal,

@@ -8,10 +8,11 @@
 import { streamText, tool } from 'ai'
 import { z }                 from 'zod'
 import { spawn }             from 'child_process'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
+import { DIM, RESET }        from './colors.js'
 
-const MAX_ITERATIONS = 15
+const MAX_ITERATIONS = parseInt(process.env.SYSAI_MAX_TURNS || '15')
 const MAX_FILE_READ  = 20_000  // chars
 
 const TOOLS = {
@@ -127,7 +128,7 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
     }
 
     if (iterations >= MAX_ITERATIONS) {
-      onToken('\n\x1b[33m[sysai: max iterations reached]\x1b[0m\n')
+      onToken(`\n${YELLOW}[sysai: max iterations reached]${RESET}\n`)
       return { text: fullText, messages: history }
     }
 
@@ -180,6 +181,11 @@ async function executeTool(call) {
     case 'read_file': {
       if (!args.path) return 'Error: no path provided'
       try {
+        const MAX_READ_BYTES = 10 * 1024 * 1024  // 10 MB — refuse to load larger files into memory
+        const stat = statSync(args.path)
+        if (stat.size > MAX_READ_BYTES) {
+          return `Error: file is ${(stat.size / 1024 / 1024).toFixed(1)} MB — too large to read directly. Use bash with tail/grep/awk to read specific sections.`
+        }
         const content = readFileSync(args.path, 'utf8')
         const allLines = content.split('\n')
         const totalLines = allLines.length
@@ -225,7 +231,6 @@ async function executeTool(call) {
 
 const MAX_DISPLAY_LINES = 10
 const MAX_BASH_OUTPUT   = 20_000   // chars sent to AI
-const DIM = '\x1b[2m', RESET = '\x1b[0m'
 
 function executeBash(command) {
   return new Promise((resolve) => {

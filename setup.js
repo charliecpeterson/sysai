@@ -5,24 +5,24 @@
  * (all lazily imported by main.js via dynamic import)
  */
 
-export const VERSION = '0.1.0'
-
+import { VERSION } from './version.js'
+import { createInterface } from 'readline'
+import { mkdirSync, existsSync, writeFileSync } from 'fs'
+import { homedir } from 'os'
+import { dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { spawnSync } from 'child_process'
 import { formatApiError } from './errors.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 export async function setup() {
-  const readline = await import('readline')
-  const { mkdirSync } = await import('fs')
-  const { homedir }   = await import('os')
   const { loadModels, saveModels, addModel, removeModel, switchActive } = await import('./models.js')
   const { generateText } = await import('ai')
   const { getModelInstance } = await import('./provider.js')
 
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
 
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', GREEN = '\x1b[32m', RED = '\x1b[31m'
-  const CYAN = '\x1b[36m', BOLD = '\x1b[1m'
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
   const ask = (q) => new Promise(resolve => rl.question(q, resolve))
 
   process.stdout.write(`\n  ${CYAN}sysai setup${RESET} — manage model configurations\n\n`)
@@ -56,7 +56,7 @@ export async function setup() {
     if (choice === 'q' || choice === '') { break }
 
     if (choice === 'a') {
-      const cfg = await addModelWizard(ask, rl, { DIM, RESET, GREEN, RED, CYAN })
+      const cfg = await addModelWizard(ask, rl)
       if (!cfg) { process.stdout.write('\n'); continue }
 
       addModel(cfg)
@@ -116,7 +116,7 @@ export async function setup() {
   rl.close()
 }
 
-async function addModelWizard(ask, rl, { DIM, RESET, GREEN, RED, CYAN }) {
+async function addModelWizard(ask, rl) {
   const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   process.stdout.write(`  Which provider?\n\n`)
@@ -159,16 +159,9 @@ async function addModelWizard(ask, rl, { DIM, RESET, GREEN, RED, CYAN }) {
 }
 
 export async function status() {
-  const { existsSync } = await import('fs')
-  const { homedir }    = await import('os')
-  const { dirname }    = await import('path')
-  const { fileURLToPath } = await import('url')
   const { loadModels } = await import('./models.js')
   const { getModelInstance } = await import('./provider.js')
   const { generateText }     = await import('ai')
-
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', CYAN = '\x1b[36m'
-  const GREEN = '\x1b[32m', RED = '\x1b[31m', YELLOW = '\x1b[33m', BOLD = '\x1b[1m'
 
   const srcDir = dirname(fileURLToPath(import.meta.url))
 
@@ -235,7 +228,6 @@ export async function status() {
 
 export async function listModels() {
   const { loadModels } = await import('./models.js')
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', GREEN = '\x1b[32m', BOLD = '\x1b[1m', CYAN = '\x1b[36m'
   const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   const data = loadModels()
@@ -267,9 +259,7 @@ export async function listModels() {
 }
 
 export async function switchModel(name) {
-  const readline = await import('readline')
   const { loadModels, switchActive } = await import('./models.js')
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', GREEN = '\x1b[32m', RED = '\x1b[31m', BOLD = '\x1b[1m'
   const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   const data = loadModels()
@@ -289,7 +279,7 @@ export async function switchModel(name) {
       process.stdout.write(`  ${DIM}${i + 1})${RESET}  ${BOLD}${m.name}${RESET}  ${DIM}${m.provider}${RESET}  ${modelId}${active}\n`)
     }
     process.stdout.write('\n')
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    const rl = createInterface({ input: process.stdin, output: process.stdout })
     const answer = await new Promise(resolve => rl.question('  Switch to (name or number): ', resolve))
     rl.close()
     const num = parseInt(answer.trim())
@@ -308,10 +298,6 @@ export async function switchModel(name) {
 }
 
 export async function editInstructions() {
-  const { mkdirSync, existsSync, writeFileSync } = await import('fs')
-  const { homedir } = await import('os')
-  const { spawnSync } = await import('child_process')
-
   const path = `${homedir()}/.sysai/instructions.md`
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
 

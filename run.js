@@ -6,12 +6,8 @@
  */
 
 import { runAgent }       from './agent.js'
-import { createSpinner, StreamRenderer, renderWriteDiff, DIM, RESET } from './render.js'
-
-const YELLOW = '\x1b[33m'
-const RED    = '\x1b[31m'
-const GREEN  = '\x1b[32m'
-const BOLD   = '\x1b[1m'
+import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW } from './colors.js'
 
 /**
  * Build an onToolApproval function.
@@ -126,8 +122,6 @@ export async function runAgentWithUI({
     })
     renderer?.flush()
     return result
-  } catch (err) {
-    throw err
   } finally {
     spinner?.stop()
     renderer?.flush()

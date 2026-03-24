@@ -9,6 +9,8 @@
 
 import readline  from 'readline'
 import { spawnSync } from 'child_process'
+import { existsSync, writeFileSync } from 'fs'
+import { homedir } from 'os'
 import { buildContext }   from './context.js'
 import { buildMessages, getSystemPrompt } from './prompt.js'
 import { makeApproval, runAgentWithUI } from './run.js'
@@ -17,14 +19,7 @@ import {
   lastSession, deleteSession, migrateOldHistory, pruneHistory,
 } from './history.js'
 import { formatApiError } from './errors.js'
-
-const CYAN   = '\x1b[36m'
-const RESET  = '\x1b[0m'
-const BOLD   = '\x1b[1m'
-const DIM    = '\x1b[2m'
-const YELLOW = '\x1b[33m'
-const RED    = '\x1b[31m'
-const GREEN  = '\x1b[32m'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 async function main() {
   if (!process.argv.includes('--inline')) {
@@ -101,6 +96,8 @@ async function main() {
     prompt: `${CYAN}>${RESET} `,
   })
 
+  let activeAbort = null
+
   rl.prompt()
 
   rl.on('line', async (input) => {
@@ -168,8 +165,6 @@ async function main() {
     process.stdout.write(`\n${DIM}sysai: session ended.${RESET}\n`)
     process.exit(0)
   })
-
-  let activeAbort = null
 
   process.on('SIGINT', () => {
     if (activeAbort) {
@@ -284,9 +279,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
       const tokens  = Math.round(
         history.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 200), 0) / 4
       )
-      const { existsSync: ex } = await import('fs')
-      const { homedir: hd }    = await import('os')
-      const hasInstr = ex(`${hd()}/.sysai/instructions.md`)
+      const hasInstr = existsSync(`${homedir()}/.sysai/instructions.md`)
       process.stdout.write('\n')
       process.stdout.write(`  ${DIM}provider:${RESET}      ${process.env.SYSAI_PROVIDER || '?'}\n`)
       process.stdout.write(`  ${DIM}model:${RESET}         ${process.env.SYSAI_MODEL || '(default)'}\n`)
@@ -331,15 +324,12 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
     }
 
     case '/instructions': {
-      const { existsSync, writeFileSync } = await import('fs')
-      const { spawnSync: sp } = await import('child_process')
-      const { homedir } = await import('os')
       const ipath = `${homedir()}/.sysai/instructions.md`
       if (!existsSync(ipath)) {
         writeFileSync(ipath, '# Machine-specific instructions for sysai\n', 'utf8')
       }
       const editor = process.env.VISUAL || process.env.EDITOR || 'vi'
-      sp(editor, [ipath], { stdio: 'inherit' })
+      spawnSync(editor, [ipath], { stdio: 'inherit' })
       process.stdout.write(`${DIM}Instructions updated. Changes take effect on next query.${RESET}\n`)
       break
     }

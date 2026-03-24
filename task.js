@@ -5,10 +5,13 @@
  * Format: YAML frontmatter (description, model, auto_run) + prompt body
  */
 
-import { readFileSync, existsSync, readdirSync, createReadStream } from 'fs'
+import { readFileSync, existsSync, readdirSync, createReadStream, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { join }    from 'path'
+import { spawnSync } from 'child_process'
+import { createInterface } from 'readline'
 import { formatApiError } from './errors.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 export const TASKS_DIR = join(homedir(), '.sysai', 'tasks')
 
@@ -66,8 +69,6 @@ export function listTasks() {
 // ── task commands ─────────────────────────────────────────────────────────────
 
 export async function listTasksCmd() {
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', BOLD = '\x1b[1m', CYAN = '\x1b[36m'
-
   const tasks = listTasks()
   if (tasks.length === 0) {
     process.stdout.write(`No tasks found. Create one with: ${CYAN}sysai task new${RESET}\n`)
@@ -103,11 +104,8 @@ export async function requireTask(name) {
 }
 
 export async function taskEdit(name) {
-  const { join: joinPath } = await import('path')
-  const { mkdirSync, existsSync, writeFileSync } = await import('fs')
-  const { spawnSync } = await import('child_process')
   mkdirSync(TASKS_DIR, { recursive: true })
-  const path = joinPath(TASKS_DIR, `${name}.md`)
+  const path = join(TASKS_DIR, `${name}.md`)
   if (!existsSync(path)) {
     writeFileSync(path, `---\ndescription: ${name}\nauto_run:\n  - echo "add commands here"\n---\nDescribe what the AI should do with the output above.\n`, 'utf8')
   }
@@ -115,23 +113,17 @@ export async function taskEdit(name) {
 }
 
 export async function taskRm(name) {
-  const { join: joinPath } = await import('path')
-  const { existsSync, unlinkSync } = await import('fs')
-  const GREEN = '\x1b[32m', RED = '\x1b[31m', RESET = '\x1b[0m'
-  const path = joinPath(TASKS_DIR, `${name}.md`)
+  const path = join(TASKS_DIR, `${name}.md`)
   if (!existsSync(path)) { process.stderr.write(`${RED}sysai: no task named "${name}"${RESET}\n`); return }
   unlinkSync(path)
   process.stdout.write(`${GREEN}  ✓ Deleted task "${name}"${RESET}\n`)
 }
 
 export async function runTaskCmd(task, { dryRun = false } = {}) {
-  const readline = await import('readline')
-  const { spawnSync } = await import('child_process')
   const { buildContext }  = await import('./context.js')
   const { buildMessages, getSystemPrompt } = await import('./prompt.js')
   const { runAgentWithUI } = await import('./run.js')
 
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', RED = '\x1b[31m', BOLD = '\x1b[1m'
   const shell = process.env.SHELL || 'bash'
 
   // Run auto_run commands silently, collect output
@@ -152,7 +144,7 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
     } else {
       process.stdout.write(`${DIM}  (no auto_run commands)${RESET}\n`)
     }
-    const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+    const rl2 = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
     const answer = await new Promise(resolve => rl2.question(`\n${DIM}Continue with AI analysis? [Y/n]: ${RESET}`, resolve))
     rl2.close()
     if (answer.trim().toLowerCase() === 'n') return
@@ -169,7 +161,7 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
   const ttyInput = process.stdin.isTTY
     ? process.stdin
     : (() => { try { return createReadStream('/dev/tty') } catch { return process.stdin } })()
-  const rl = readline.createInterface({ input: ttyInput, output: process.stderr, terminal: true })
+  const rl = createInterface({ input: ttyInput, output: process.stderr, terminal: true })
 
   const abortController = new AbortController()
   process.once('SIGINT', () => abortController.abort())
@@ -197,7 +189,7 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
   rl.close()
 }
 
-export const DESIGNER_PROMPT = `You are a sysai task designer. Help the user create a reusable task file.
+const DESIGNER_PROMPT = `You are a sysai task designer. Help the user create a reusable task file.
 
 Tasks are saved at ~/.sysai/tasks/<name>.md and run with: sysai <name>
 
@@ -230,19 +222,15 @@ GUIDELINES:
 - Only collect in auto_run what the AI actually needs — keep it focused`
 
 export async function taskDesigner() {
-  const readline = await import('readline')
-  const { mkdirSync } = await import('fs')
   const { buildContext }  = await import('./context.js')
   const { buildMessages } = await import('./prompt.js')
   const { makeApproval, runAgentWithUI } = await import('./run.js')
   const { runAgent }      = await import('./agent.js')
-  const { createSpinner, StreamRenderer, DIM, RESET } = await import('./render.js')
-
-  const YELLOW = '\x1b[33m', RED = '\x1b[31m', CYAN = '\x1b[36m', GREEN = '\x1b[32m', BOLD = '\x1b[1m'
+  const { createSpinner, StreamRenderer } = await import('./render.js')
 
   mkdirSync(TASKS_DIR, { recursive: true })
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
   const prompt = (q) => new Promise(resolve => rl.question(q, resolve))
 
   process.stdout.write(`\n  ${CYAN}${BOLD}sysai task designer${RESET}`)

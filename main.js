@@ -8,7 +8,10 @@
  *   sysai --setup-shell — print shell integration block (for remote install)
  */
 
-export const VERSION = '0.1.0'
+export { VERSION } from './version.js'
+import { VERSION } from './version.js'
+
+import { RESET, BOLD, DIM, GREEN, CYAN } from './colors.js'
 
 const [, , cmd, ...rest] = process.argv
 
@@ -104,7 +107,6 @@ switch (cmd) {
 }
 
 function printHelp() {
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', CYAN = '\x1b[36m', BOLD = '\x1b[1m'
   process.stdout.write(`\n  ${CYAN}${BOLD}sysai${RESET} v${VERSION} — terminal AI assistant\n\n`)
   process.stdout.write(`  ${BOLD}Usage:${RESET}  sysai <command> [args]\n\n`)
 
@@ -153,7 +155,6 @@ async function install() {
   const { fileURLToPath } = await import('url')
   const { execSync } = await import('child_process')
 
-  const DIM = '\x1b[2m', RESET = '\x1b[0m', GREEN = '\x1b[32m', CYAN = '\x1b[36m'
   const home = homedir()
   const dir = `${home}/.sysai`
   const binDir = `${dir}/bin`

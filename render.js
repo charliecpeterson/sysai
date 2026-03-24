@@ -5,10 +5,9 @@ import { readFileSync, existsSync, writeFileSync, mkdtempSync, unlinkSync, rmdir
 import { tmpdir } from 'os'
 import { join }   from 'path'
 import { spawnSync } from 'child_process'
+import { RESET, BOLD, DIM, GREEN, RED, CYAN } from './colors.js'
 
-export const RESET = '\x1b[0m'
-export const BOLD  = '\x1b[1m'
-export const DIM   = '\x1b[2m'
+export { RESET, BOLD, DIM }  // re-export for callers that import colors from render.js
 
 const CLEAR_LINE = '\x1b[2K\r'
 const FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
@@ -43,10 +42,6 @@ export function createSpinner(writeFn) {
 }
 
 // ── Write diff ────────────────────────────────────────────────────────────────
-
-const GREEN = '\x1b[32m'
-const RED   = '\x1b[31m'
-const CYAN  = '\x1b[36m'
 
 const DIFF_CAP = 40   // max lines shown
 
@@ -122,7 +117,7 @@ export class StreamRenderer {
   #line(line) {
     if (line.trimStart().startsWith('```')) {
       this.#inCode = !this.#inCode
-      this.#write((this.#inCode ? CODE_BG : CODE_BG) + line + RESET)
+      this.#write((this.#inCode ? CODE_BG : RESET) + line + RESET)
       return
     }
     if (this.#inCode) { this.#write(CODE_BG + line + RESET); return }

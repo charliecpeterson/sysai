@@ -6,13 +6,19 @@
  * Subsequent lines are {role, content} message pairs.
  */
 
-import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, unlinkSync, renameSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, unlinkSync, renameSync, mkdirSync, openSync, readSync, writeSync, closeSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
 const HISTORY_DIR  = join(homedir(), '.sysai', 'history')
 const MAX_SESSIONS = 50   // keep at most this many session files
 const MAX_TURNS    = 20   // turns to load when resuming
+
+// Metadata is always the first line. We pad it to a fixed byte width so
+// rewriteMeta can overwrite exactly those bytes in place without reading
+// the rest of the file. 320 bytes fits any realistic metadata line:
+// ts(30) + hostname(~50) + title(100) + turns(~3) + JSON overhead(~50) ≈ 233
+const HEADER_SIZE = 320
 
 /**
  * Create a new session. Returns a session object used by other functions.
@@ -24,7 +30,7 @@ export function createSession(hostname = 'unknown') {
   const file = join(HISTORY_DIR, `${safe}.jsonl`)
 
   const meta = { type: 'meta', ts, hostname, title: null, turns: 0 }
-  writeFileSync(file, JSON.stringify(meta) + '\n', 'utf8')
+  writeFileSync(file, JSON.stringify(meta).padEnd(HEADER_SIZE) + '\n', 'utf8')
 
   return { file, meta }
 }
@@ -69,8 +75,7 @@ export function listSessions() {
     return files.map(f => {
       try {
         const filePath = join(HISTORY_DIR, f)
-        const firstLine = readFileSync(filePath, 'utf8').split('\n')[0]
-        const meta = JSON.parse(firstLine)
+        const meta = JSON.parse(readFirstLine(filePath))
         return { file: filePath, ts: meta.ts, hostname: meta.hostname, title: meta.title, turns: meta.turns || 0 }
       } catch {
         return null
@@ -91,8 +96,8 @@ export function loadSession(filePath, n = MAX_TURNS) {
   try {
     const lines = readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean)
     // Skip first line (metadata), take message lines
-    const messageLine = lines.slice(1)
-    const recent = messageLine.slice(-(n * 2))  // 2 lines per turn (user + assistant)
+    const messageLines = lines.slice(1)
+    const recent = messageLines.slice(-(n * 2))  // 2 lines per turn (user + assistant)
     const messages = []
 
     for (const line of recent) {
@@ -115,8 +120,7 @@ export function loadSession(filePath, n = MAX_TURNS) {
  */
 export function loadSessionMeta(filePath) {
   try {
-    const firstLine = readFileSync(filePath, 'utf8').split('\n')[0]
-    return JSON.parse(firstLine)
+    return JSON.parse(readFirstLine(filePath))
   } catch {
     return null
   }
@@ -206,10 +210,27 @@ function ensureDir() {
   mkdirSync(HISTORY_DIR, { recursive: true })
 }
 
+// Read just the first line of a file without loading the whole thing into memory.
+// Session metadata is always the first line; JSONL files can be many MB.
+function readFirstLine(filePath) {
+  const fd = openSync(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(1024)
+    const bytesRead = readSync(fd, buf, 0, 1024, 0)
+    const chunk = buf.toString('utf8', 0, bytesRead)
+    const newlineIdx = chunk.indexOf('\n')
+    return newlineIdx >= 0 ? chunk.slice(0, newlineIdx) : chunk
+  } finally {
+    closeSync(fd)
+  }
+}
+
 function rewriteMeta(session) {
   try {
-    const lines = readFileSync(session.file, 'utf8').split('\n')
-    lines[0] = JSON.stringify(session.meta)
-    writeFileSync(session.file, lines.join('\n'), 'utf8')
+    const json = JSON.stringify(session.meta)
+    const padded = Buffer.from(json.padEnd(HEADER_SIZE) + '\n', 'utf8')
+    const fd = openSync(session.file, 'r+')
+    try { writeSync(fd, padded, 0, padded.length, 0) }
+    finally { closeSync(fd) }
   } catch {}
 }
