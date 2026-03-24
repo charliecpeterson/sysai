@@ -1,8 +1,8 @@
 # sysai — terminal-native AI assistant
 
-A lightweight CLI tool that gives you an AI assistant anywhere in your terminal — local, over SSH, inside SLURM jobs, containers, sudo sessions. Type `?` and ask.
+A lightweight CLI tool that gives you an AI assistant anywhere in your terminal. Type `?` and ask.
 
-Install once per machine (or once per shared filesystem). Works everywhere your shell does.
+Works everywhere your shell does.
 
 ## Quick start
 
@@ -22,8 +22,6 @@ dmesg | tail -50 | ? what do these kernel messages mean
 sysai chat             # persistent chat with split-pane tmux support
 sysai doctor           # run a built-in task
 ```
-
-On HPC clusters with shared `/home`, install once on the login node — it works on every compute node automatically via `srun`, `ssh`, etc.
 
 ## Usage
 
