@@ -31,48 +31,48 @@ switch (cmd) {
 
   case 'install':
     await install()
-    break
+    process.exit(0)
 
   case 'setup': {
     const { setup } = await import('./setup.js')
     await setup()
-    break
+    process.exit(0)
   }
 
   case 'status': {
     const { status } = await import('./setup.js')
     await status()
-    break
+    process.exit(0)
   }
 
   case 'models': {
     const { listModels } = await import('./setup.js')
     await listModels()
-    break
+    process.exit(0)
   }
 
   case 'model': {
     const { switchModel } = await import('./setup.js')
     await switchModel(rest[0])
-    break
+    process.exit(0)
   }
 
   case 'instructions': {
     const { editInstructions } = await import('./setup.js')
     await editInstructions()
-    break
+    process.exit(0)
   }
 
   case 'tasks': {
     const { listTasksCmd } = await import('./task.js')
     await listTasksCmd()
-    break
+    process.exit(0)
   }
 
   case 'task': {
     const { taskCmd } = await import('./task.js')
     await taskCmd(rest)
-    break
+    process.exit(0)
   }
 
   case '--setup-shell':
@@ -93,7 +93,7 @@ switch (cmd) {
       if (task) {
         const dryRun = rest.includes('--dry-run')
         await runTaskCmd(task, { dryRun })
-        break
+        process.exit(0)
       }
     }
     // No subcommand — if args given treat as one-shot question, otherwise show help
@@ -274,7 +274,7 @@ async function install() {
 
   // 7. Run setup if no config exists
   process.stdout.write('\n')
-  if (existsSync(`${dir}/models.json`) || existsSync(`${dir}/config`)) {
+  if (existsSync(`${dir}/models.json`)) {
     process.stdout.write(`${GREEN}  ✓${RESET} Config already exists\n\n`)
     process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n`)
     process.stdout.write(`  To reconfigure: ${CYAN}sysai setup${RESET}\n\n`)

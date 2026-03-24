@@ -69,6 +69,7 @@ async function main() {
 
   process.stdout.write('\n')
   rl.close()
+  process.exit(0)
 }
 
 function parseFlag(args, flag) {

@@ -36,7 +36,7 @@ async function main() {
       spawnSync('tmux', [
         'split-window', '-h', '-p', '38',
         '-e', `SYSAI_WORK_PANE=${workPane}`,
-        chatCmd,
+        'sh', '-c', quotedCmd,
       ], { stdio: 'inherit' })
       process.exit(0)
     }
@@ -196,11 +196,11 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
 
     case '/new': {
       history.length = 0
-      return buildContext().then(ctx => {
-        const session = createSession(ctx.hostname)
-        setSession([], session)
-        process.stdout.write(`${DIM}Started new session.${RESET}\n`)
-      })
+      const ctx = await buildContext()
+      const session = createSession(ctx.hostname)
+      setSession([], session)
+      process.stdout.write(`${DIM}Started new session.${RESET}\n`)
+      break
     }
 
     case '/history':
@@ -273,16 +273,20 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
     }
 
     case '/status': {
-      const sess    = getCurrentSession()
+      const { getActiveConfig } = await import('./models.js')
+      const activeCfg = getActiveConfig()
       const turns   = Math.floor(history.length / 2)
       const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
       const tokens  = Math.round(
         history.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 200), 0) / 4
       )
       const hasInstr = existsSync(`${homedir()}/.sysai/instructions.md`)
+      const provider = activeCfg?.provider ?? '?'
+      const model    = activeCfg?.model ?? '(default)'
+      const name     = activeCfg?.name ? ` ${DIM}(${activeCfg.name})${RESET}` : ''
       process.stdout.write('\n')
-      process.stdout.write(`  ${DIM}provider:${RESET}      ${process.env.SYSAI_PROVIDER || '?'}\n`)
-      process.stdout.write(`  ${DIM}model:${RESET}         ${process.env.SYSAI_MODEL || '(default)'}\n`)
+      process.stdout.write(`  ${DIM}provider:${RESET}      ${provider}\n`)
+      process.stdout.write(`  ${DIM}model:${RESET}         ${model}${name}\n`)
       process.stdout.write(`  ${DIM}turns:${RESET}         ${turns} / ${maxTurns}\n`)
       process.stdout.write(`  ${DIM}~tokens:${RESET}       ~${tokens.toLocaleString()}\n`)
       process.stdout.write(`  ${DIM}instructions:${RESET}  ${hasInstr ? '✓ loaded' : 'none'}\n`)

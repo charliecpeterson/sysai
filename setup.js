@@ -172,13 +172,7 @@ export async function status() {
   const models = data?.models ?? []
 
   if (models.length === 0) {
-    // Legacy flat config fallback
-    const configPath = `${homedir()}/.sysai/config`
-    if (!existsSync(configPath)) {
-      process.stdout.write(`  ${YELLOW}No models configured — run: sysai setup${RESET}\n\n`)
-      return
-    }
-    process.stdout.write(`  ${DIM}(legacy config — run 'sysai setup' to migrate to named models)${RESET}\n\n`)
+    process.stdout.write(`  ${YELLOW}No models configured — run: sysai setup${RESET}\n\n`)
     return
   }
 

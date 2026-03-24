@@ -10,9 +10,9 @@ import { z }                 from 'zod'
 import { spawn }             from 'child_process'
 import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
-import { DIM, RESET }        from './colors.js'
+import { DIM, YELLOW, RESET } from './colors.js'
 
-const MAX_ITERATIONS = parseInt(process.env.SYSAI_MAX_TURNS || '15')
+const MAX_ITERATIONS = parseInt(process.env.SYSAI_MAX_TURNS || '20')
 const MAX_FILE_READ  = 20_000  // chars
 
 const TOOLS = {

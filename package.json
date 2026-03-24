@@ -1,14 +1,14 @@
 {
   "name": "sysai",
   "version": "0.1.0",
-  "description": "Terminal-native sysadmin AI assistant — works over any SSH session",
+  "description": "Terminal-native AI assistant — works over SSH, SLURM, containers",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node server.js",
-    "install-shell": "bash install.sh",
+    "start": "node main.js chat --inline",
+    "install": "node main.js install",
     "build": "bash build.sh",
     "build:local": "bun build --compile --minify main.js --outfile dist/sysai-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
   },
