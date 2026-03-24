@@ -3,10 +3,17 @@
  * main.js — unified entry point for the sysai binary
  *
  * Usage:
- *   sysai repl          — start interactive agentic REPL (ai-pane)
+ *   sysai chat          — interactive chat (tmux split pane)
  *   sysai ask <q>       — one-shot query
- *   sysai --setup-shell — print shell integration block (for remote install)
+ *   sysai --setup-shell — print shell integration block
  */
+
+const [major] = process.versions.node.split('.').map(Number)
+if (major < 20) {
+  console.error(`sysai requires Node.js 20+. You have ${process.version}.`)
+  console.error('Install with: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install 20')
+  process.exit(1)
+}
 
 export { VERSION } from './version.js'
 import { VERSION } from './version.js'

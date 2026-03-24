@@ -4,7 +4,7 @@
   "description": "Terminal-native AI assistant — works over SSH, SLURM, containers",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "start": "node main.js chat --inline",
