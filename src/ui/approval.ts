@@ -7,7 +7,7 @@
 
 import type { Interface as RLInterface } from 'readline'
 import { runAgent, parseToolArgs } from '../core/agent.js'
-import { getMcpManager } from '../core/mcp-client.js'
+import { getMcpManager, isMcpTool } from '../core/mcp-client.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
 import { RESET, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
@@ -135,8 +135,19 @@ export async function runAgentWithUI({
         ? (token) => renderer!.write(token)
         : (token) => contentStream.write(token),
       onToolApproval,
-      onToolResult:   (_call, _result, elapsedMs) => {
-        if (uiIsTTY) uiStream.write(`${DIM}  ✓ ${(elapsedMs / 1000).toFixed(1)}s${RESET}\n`)
+      onToolResult:   (call, result, elapsedMs) => {
+        if (!uiIsTTY) return
+        const toolName = (call as { toolName: string }).toolName
+        const timing   = `${(elapsedMs / 1000).toFixed(1)}s`
+        if (isMcpTool(toolName)) {
+          // Show the raw result so users can see errors (e.g. bad API key, quota exceeded)
+          const preview = (result as string).length > 300
+            ? (result as string).slice(0, 300) + '…'
+            : result as string
+          uiStream.write(`${DIM}  ✓ ${timing}  ${preview}${RESET}\n`)
+        } else {
+          uiStream.write(`${DIM}  ✓ ${timing}${RESET}\n`)
+        }
       },
       abortSignal,
       mcpManager: mcpManager ?? undefined,
