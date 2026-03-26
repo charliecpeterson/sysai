@@ -72,15 +72,19 @@ switch (cmd) {
 
   case 'mcp': {
     const subCmd = rest[0]
-    const { listMcps, addMcp, removeMcp } = await import('./src/commands/mcp.js')
+    const { listMcps, addMcp, editMcp, removeMcp, testMcp } = await import('./src/commands/mcp.js')
     if (!subCmd || subCmd === 'list') {
       await listMcps()
     } else if (subCmd === 'add') {
       await addMcp()
+    } else if (subCmd === 'edit') {
+      await editMcp(rest[1])
     } else if (subCmd === 'remove' || subCmd === 'rm') {
       removeMcp(rest[1])
+    } else if (subCmd === 'test') {
+      await testMcp(rest[1])
     } else {
-      process.stderr.write(`sysai: unknown mcp subcommand "${subCmd}". Try: list, add, remove\n`)
+      process.stderr.write(`sysai: unknown mcp subcommand "${subCmd}". Try: list, add, edit, remove, test\n`)
       process.exit(1)
     }
     process.exit(0)
@@ -155,7 +159,9 @@ function printHelp(): void {
     ['MCP', [
       ['mcp list',           'List configured MCP servers'],
       ['mcp add',            'Add an MCP server (interactive wizard)'],
+      ['mcp edit <name>',    'Edit a server\'s config in place'],
       ['mcp remove <name>',  'Remove an MCP server'],
+      ['mcp test [name]',    'Connect and list tools (all servers if no name)'],
     ]],
     ['Config', [
       ['instructions',       'Edit ~/.sysai/instructions.md (injected into every query)'],

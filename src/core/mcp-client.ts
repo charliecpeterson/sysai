@@ -194,6 +194,14 @@ export class McpClientManager {
     }))
   }
 
+  /** Tools grouped by server, for display purposes. */
+  toolsByServer(): Array<{ serverName: string; tools: Array<{ name: string; description: string }> }> {
+    return [...this.conns.entries()].map(([serverName, { tools }]) => ({
+      serverName,
+      tools: tools.map(t => ({ name: t.name, description: t.description ?? '' })),
+    }))
+  }
+
   closeAll(): void {
     for (const { conn } of this.conns.values()) conn.close()
     this.conns.clear()

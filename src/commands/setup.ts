@@ -15,6 +15,8 @@ import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
 import { generateText } from 'ai'
 import { loadModels, addModel, removeModel, switchActive } from '../storage/models.js'
+import { loadMcpConfig } from '../storage/mcp.js'
+import { McpClientManager } from '../core/mcp-client.js'
 import { formatApiError } from '../ui/errors.js'
 import { DEFAULTS, getModelInstance } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
@@ -191,7 +193,15 @@ export async function status(): Promise<void> {
     }
   }
 
-  const results = await Promise.all(models.map(m => ping(m)))
+  // Run model pings + MCP connect in parallel
+  const mcpConfig  = loadMcpConfig()
+  const mcpNames   = Object.keys(mcpConfig.servers ?? {})
+  const mcpManager = new McpClientManager()
+
+  const [results] = await Promise.all([
+    Promise.all(models.map(m => ping(m))),
+    mcpNames.length > 0 ? mcpManager.connectAll(mcpConfig.servers) : Promise.resolve(),
+  ])
 
   // Column widths
   const maxName  = Math.max(...models.map(m => m.name.length), 4)
@@ -206,6 +216,21 @@ export async function status(): Promise<void> {
     const errNote = !r.ok ? `  ${RED}${DIM}${r.err}${RESET}` : ''
     const name = isActive ? `${BOLD}${m.name.padEnd(maxName)}${RESET}` : m.name.padEnd(maxName)
     process.stdout.write(`  ${dot}  ${name}  ${m.provider.padEnd(maxProv)}  ${modelId}${activeMark}${errNote}\n`)
+  }
+
+  // MCP servers
+  if (mcpNames.length > 0) {
+    process.stdout.write('\n')
+    const connected = new Set(mcpManager.summary().map(s => s.serverName))
+    for (const name of mcpNames) {
+      if (connected.has(name)) {
+        const group = mcpManager.toolsByServer().find(g => g.serverName === name)!
+        process.stdout.write(`  ${GREEN}◆${RESET}  ${name}  ${DIM}${group.tools.length} tool${group.tools.length === 1 ? '' : 's'}${RESET}\n`)
+      } else {
+        process.stdout.write(`  ${RED}◆${RESET}  ${name}  ${RED}${DIM}failed to connect${RESET}\n`)
+      }
+    }
+    mcpManager.closeAll()
   }
 
   process.stdout.write('\n')
