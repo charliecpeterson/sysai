@@ -59,7 +59,10 @@ export async function addMcp(): Promise<void> {
     env = {}
     for (const pair of envRaw.split(/\s+/)) {
       const eq = pair.indexOf('=')
-      if (eq > 0) env[pair.slice(0, eq)] = pair.slice(eq + 1)
+      if (eq > 0) {
+        const val = pair.slice(eq + 1).replace(/^(['"])(.*)\1$/, '$2')  // strip surrounding quotes
+        env[pair.slice(0, eq)] = val
+      }
     }
   }
 
