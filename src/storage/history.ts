@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, unlinkSync, renameSync, mkdirSync, openSync, readSync, closeSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import type { Session, SessionMeta, SessionSummary } from '../types.js'
+import type { Session, SessionMeta, SessionSummary, ModelMessage } from '../types.js'
 
 const HISTORY_DIR  = join(homedir(), '.sysai', 'history')
 const MAX_SESSIONS = 50   // keep at most this many session files
@@ -83,18 +83,18 @@ export function listSessions(): SessionSummary[] {
 /**
  * Load a session's messages as a history array for the agent.
  */
-export function loadSession(filePath: string, n = MAX_TURNS): unknown[] {
+export function loadSession(filePath: string, n = MAX_TURNS): ModelMessage[] {
   try {
     const lines = readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean)
     const messageLines = lines.slice(1)
     const recent = messageLines.slice(-(n * 2))  // 2 lines per turn (user + assistant)
-    const messages: unknown[] = []
+    const messages: ModelMessage[] = []
 
     for (const line of recent) {
       try {
         const entry = JSON.parse(line) as { role: string; content: string }
         if (entry.role && entry.content) {
-          messages.push({ role: entry.role, content: entry.content })
+          messages.push({ role: entry.role, content: entry.content } as ModelMessage)
         }
       } catch {}
     }
@@ -120,7 +120,7 @@ export function loadSessionMeta(filePath: string): SessionMeta | null {
  * Overwrite a session file with a compacted message set.
  * Tool-call messages are dropped since they can't survive reload anyway.
  */
-export function writeCompactedSession(session: Session, messages: unknown[]): void {
+export function writeCompactedSession(session: Session, messages: ModelMessage[]): void {
   if (!session?.file) return
   try {
     const msgLines = (messages as Array<{ role: string; content: unknown }>)

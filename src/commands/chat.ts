@@ -12,6 +12,7 @@ import type { Interface as RLInterface } from 'readline'
 import { spawnSync } from 'child_process'
 import { existsSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
+import { generateText } from 'ai'
 import { buildContext }   from '../env/context.js'
 import { buildMessages, getSystemPrompt } from '../core/prompt.js'
 import { makeApproval, runAgentWithUI } from '../ui/approval.js'
@@ -22,10 +23,10 @@ import {
 } from '../storage/history.js'
 import { formatApiError } from '../ui/errors.js'
 import { VERSION } from '../version.js'
-import { getActiveConfig } from '../storage/models.js'
-import { DEFAULTS } from '../core/provider.js'
+import { getActiveConfig, loadModels, switchActive } from '../storage/models.js'
+import { DEFAULTS, getModel } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
-import type { Session } from '../types.js'
+import type { Session, ModelMessage } from '../types.js'
 
 async function main(): Promise<void> {
   if (!process.argv.includes('--inline')) {
@@ -62,7 +63,7 @@ async function main(): Promise<void> {
     // No tmux — fall through to inline
   }
 
-  let sessionHistory: unknown[] = []
+  let sessionHistory: ModelMessage[] = []
   let currentSession: Session | null = null
 
   // One-time migration from old history.jsonl
@@ -86,7 +87,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${DIM}Resume? (y/N) ${RESET}`)
     const answer = await readLineOnce()
     if (answer.trim().toLowerCase() === 'y') {
-      sessionHistory = loadSession(last.file) as unknown[]
+      sessionHistory = loadSession(last.file)
       // Continue the existing session
       currentSession = { file: last.file, meta: { ts: last.ts, hostname: last.hostname, title: last.title, turns: last.turns } }
       process.stdout.write(`${DIM}Loaded ${last.turns} prior turns.${RESET}\n`)
@@ -121,7 +122,7 @@ async function main(): Promise<void> {
     if (question.startsWith('/')) {
       const result = handleCommand(question, sessionHistory, rl, {
         getCurrentSession: () => currentSession,
-        setSession: (hist: unknown[], sess: Session | null) => { sessionHistory = hist; currentSession = sess },
+        setSession: (hist: ModelMessage[], sess: Session | null) => { sessionHistory = hist; currentSession = sess },
       })
       if (result instanceof Promise) await result
       rl.prompt()
@@ -162,7 +163,7 @@ async function main(): Promise<void> {
     // Preserve full agent message history (including tool calls/results) for continuity.
     // result.messages already contains the prior sessionHistory + new turns, so just replace.
     if (result?.messages) {
-      sessionHistory = result.messages
+      sessionHistory = result.messages as ModelMessage[]
       // Cap at ~60 messages to stay within context limits (tool calls add extra messages)
       const cap = parseInt(process.env.SYSAI_MAX_TURNS || '20') * 3
       if (sessionHistory.length > cap) sessionHistory = sessionHistory.slice(-cap)
@@ -194,11 +195,11 @@ async function main(): Promise<void> {
 
 async function handleCommand(
   input: string,
-  history: unknown[],
+  history: ModelMessage[],
   rl: RLInterface,
   { getCurrentSession, setSession }: {
     getCurrentSession: () => Session | null
-    setSession: (hist: unknown[], sess: Session | null) => void
+    setSession: (hist: ModelMessage[], sess: Session | null) => void
   }
 ): Promise<void> {
   const parts = input.split(/\s+/)
@@ -226,7 +227,7 @@ async function handleCommand(
     }
 
     case '/history': {
-      const userMsgs = (history as Array<{ role: string; content?: unknown }>)
+      const userMsgs = history
         .filter(m => m.role === 'user' && typeof m.content === 'string')
       if (userMsgs.length === 0) {
         process.stdout.write(`${DIM}No history this session.${RESET}\n`)
@@ -274,7 +275,7 @@ async function handleCommand(
         break
       }
       const target = sessions[n - 1]
-      const loaded = loadSession(target.file) as unknown[]
+      const loaded = loadSession(target.file)
       const session: Session = { file: target.file, meta: { ts: target.ts, hostname: target.hostname, title: target.title, turns: target.turns } }
       setSession(loaded, session)
       process.stdout.write(`${GREEN}Resumed:${RESET} ${target.title || '(untitled)'} ${DIM}(${target.turns} turns)${RESET}\n`)
@@ -300,12 +301,11 @@ async function handleCommand(
     }
 
     case '/status': {
-      const { getActiveConfig } = await import('../storage/models.js')
       const activeCfg = getActiveConfig()
       const turns   = Math.floor(history.length / 2)
       const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
       const tokens  = Math.round(
-        (history as Array<{ content?: unknown }>).reduce((sum: number, m) => {
+        history.reduce((sum: number, m) => {
           return sum + (typeof m.content === 'string' ? m.content.length : 200)
         }, 0) / 4
       )
@@ -333,9 +333,6 @@ async function handleCommand(
       const recent = history.slice(-COMPACT_KEEP * 2)
       process.stdout.write(`${DIM}  Summarising ${Math.floor(older.length / 2)} older turns…${RESET}`)
       try {
-        const { generateText } = await import('ai')
-        const { getModel }     = await import('../core/provider.js')
-
         // Extract readable text from all message types including tool calls/results
         const transcript = older.map(m => {
           const msg = m as { role: string; content: unknown }
@@ -360,7 +357,7 @@ async function handleCommand(
           prompt:    `Summarise this conversation concisely. Preserve key facts, commands run, findings, errors, and decisions:\n\n${transcript}`,
           maxOutputTokens: 600,
         })
-        const summarised = [
+        const summarised: ModelMessage[] = [
           { role: 'user',      content: '[Earlier conversation — summarised]' },
           { role: 'assistant', content: text },
           ...recent,
@@ -388,7 +385,6 @@ async function handleCommand(
     }
 
     case '/model': {
-      const { loadModels, switchActive } = await import('../storage/models.js')
       const data = loadModels()
       const models = data?.models ?? []
       if (models.length === 0) {

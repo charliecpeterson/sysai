@@ -10,10 +10,15 @@ import { homedir } from 'os'
 import { join, resolve, sep } from 'path'
 import { spawnSync } from 'child_process'
 import { createInterface } from 'readline'
-import { parseToolArgs } from '../core/agent.js'
+import { load as loadYaml } from 'js-yaml'
+import { parseToolArgs, runAgent } from '../core/agent.js'
+import { buildContext } from '../env/context.js'
+import { buildMessages, getSystemPrompt } from '../core/prompt.js'
+import { makeApproval, runAgentWithUI } from '../ui/approval.js'
+import { createSpinner, StreamRenderer } from '../ui/render.js'
 import { formatApiError } from '../ui/errors.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
-import type { Task, ToolDecision } from '../types.js'
+import type { Task, ToolDecision, ModelMessage } from '../types.js'
 
 export const TASKS_DIR = join(homedir(), '.sysai', 'tasks')
 
@@ -34,27 +39,19 @@ export function parseTask(content: string, name = ''): Task {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) return { name, description: name, model: null, auto_run: [], prompt: content.trim() }
 
-  const frontmatter = match[1]
-  const body        = match[2].trim()
-  const meta: Record<string, unknown> & { auto_run: string[] } = { auto_run: [] }
-  let inAutoRun     = false
-
-  for (const line of frontmatter.split('\n')) {
-    if (/^auto_run:\s*$/.test(line)) { inAutoRun = true; continue }
-    if (inAutoRun) {
-      const item = line.match(/^\s{2}-\s(.+)$/)
-      if (item) { meta.auto_run.push(item[1]); continue }
-      inAutoRun = false
-    }
-    const kv = line.match(/^(\w+):\s*(.+)$/)
-    if (kv) meta[kv[1]] = kv[2].trim()
+  const body = match[2].trim()
+  let meta: Record<string, unknown> = {}
+  try {
+    meta = (loadYaml(match[1]) as Record<string, unknown>) ?? {}
+  } catch {
+    // Malformed YAML — use defaults
   }
 
   return {
-    name:        (meta.name        as string) || name,
-    description: (meta.description as string) || name,
-    model:       (meta.model       as string) || null,
-    auto_run:    meta.auto_run,
+    name:        (meta['name']        as string) || name,
+    description: (meta['description'] as string) || name,
+    model:       (meta['model']       as string) || null,
+    auto_run:    Array.isArray(meta['auto_run']) ? (meta['auto_run'] as string[]) : [],
     prompt:      body,
   }
 }
@@ -132,9 +129,6 @@ export async function taskRm(name: string): Promise<void> {
 }
 
 export async function runTaskCmd(task: Task, { dryRun = false } = {}): Promise<void> {
-  const { buildContext }  = await import('../env/context.js')
-  const { buildMessages, getSystemPrompt } = await import('../core/prompt.js')
-  const { runAgentWithUI } = await import('../ui/approval.js')
 
   const shell = process.env.SHELL || 'bash'
 
@@ -237,11 +231,6 @@ GUIDELINES:
 - Only collect in auto_run what the AI actually needs — keep it focused`
 
 export async function taskDesigner(): Promise<void> {
-  const { buildContext }  = await import('../env/context.js')
-  const { buildMessages } = await import('../core/prompt.js')
-  const { makeApproval, runAgentWithUI } = await import('../ui/approval.js')
-  const { runAgent }      = await import('../core/agent.js')
-  const { createSpinner, StreamRenderer } = await import('../ui/render.js')
 
   mkdirSync(TASKS_DIR, { recursive: true })
 
@@ -253,7 +242,7 @@ export async function taskDesigner(): Promise<void> {
   process.stdout.write(`  ${DIM}Ctrl+C to cancel${RESET}\n\n`)
 
   const context = await buildContext({ questionHint: 'task design' })
-  let history: unknown[]         = []
+  let history: ModelMessage[]    = []
   let activeAbort: AbortController | null = null
 
   const onSigint = () => {
@@ -287,7 +276,7 @@ export async function taskDesigner(): Promise<void> {
   const spinner  = process.stderr.isTTY ? createSpinner(s => process.stderr.write(s)) : null
   const renderer = process.stdout.isTTY ? new StreamRenderer(s => process.stdout.write(s)) : null
 
-  const runTurn = async (messages: unknown[]): Promise<unknown[]> => {
+  const runTurn = async (messages: ModelMessage[]): Promise<ModelMessage[]> => {
     activeAbort = new AbortController()
     try {
       const result = await runAgent({

@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { formatContext } from '../env/context.js'
-import type { Context } from '../types.js'
+import type { Context, ModelMessage } from '../types.js'
 
 const INSTRUCTIONS_PATH = join(homedir(), '.sysai', 'instructions.md')
 
@@ -65,8 +65,8 @@ export function getSystemPrompt(): string {
 export function buildMessages({ context, question, history = [] }: {
   context: Context
   question: string
-  history?: unknown[]
-}): unknown[] {
+  history?: ModelMessage[]
+}): ModelMessage[] {
   const parts: string[] = []
 
   parts.push(`## Environment\n${formatContext(context)}`)
@@ -81,7 +81,7 @@ export function buildMessages({ context, question, history = [] }: {
 
   parts.push(`## Question\n${question}`)
 
-  const userMessage = { role: 'user', content: parts.join('\n\n') }
+  const userMessage: ModelMessage = { role: 'user', content: parts.join('\n\n') }
 
   return [...history, userMessage]
 }

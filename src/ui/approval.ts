@@ -12,7 +12,7 @@ import { RESET, DIM, RED, GREEN, YELLOW } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
 
 // Paths that require explicit user confirmation even in auto-approve mode.
-const SENSITIVE_PATH_RE = /\.ssh\/|\.gnupg\/|\.bashrc|\.zshrc|\.bash_profile|\.zprofile|\.profile|\.bash_logout|authorized_keys|known_hosts|id_rsa|id_ed25519|\/etc\/|sudoers/i
+const SENSITIVE_PATH_RE = /\.ssh\/|\.gnupg\/|\.aws\/|\.kube\/|\.docker\/|\/root\/|\.bashrc|\.zshrc|\.bash_profile|\.zprofile|\.profile|\.bash_logout|authorized_keys|known_hosts|id_rsa|id_ed25519|id_ecdsa|id_dsa|\/etc\/|sudoers|\.netrc/i
 
 /**
  * Build an onToolApproval function.

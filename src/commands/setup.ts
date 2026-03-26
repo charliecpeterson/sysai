@@ -13,16 +13,14 @@ import { homedir } from 'os'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
+import { generateText } from 'ai'
+import { loadModels, addModel, removeModel, switchActive } from '../storage/models.js'
 import { formatApiError } from '../ui/errors.js'
-import { DEFAULTS } from '../core/provider.js'
+import { DEFAULTS, getModelInstance } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
 import type { ModelConfig, Provider } from '../types.js'
 
 export async function setup(): Promise<void> {
-  const { loadModels, saveModels, addModel, removeModel, switchActive } = await import('../storage/models.js')
-  const { generateText } = await import('ai')
-  const { getModelInstance } = await import('../core/provider.js')
-
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
@@ -164,10 +162,6 @@ async function addModelWizard(
 }
 
 export async function status(): Promise<void> {
-  const { loadModels } = await import('../storage/models.js')
-  const { getModelInstance } = await import('../core/provider.js')
-  const { generateText }     = await import('ai')
-
   const srcDir = dirname(fileURLToPath(import.meta.url))
 
   process.stdout.write(`\n  ${CYAN}sysai${RESET} v${VERSION}\n\n`)
@@ -230,8 +224,6 @@ export async function status(): Promise<void> {
 }
 
 export async function listModels(): Promise<void> {
-  const { loadModels } = await import('../storage/models.js')
-
   const data = loadModels()
   if (!data?.models?.length) {
     process.stdout.write(`No models configured. Run: ${CYAN}sysai setup${RESET}\n`)
@@ -261,8 +253,6 @@ export async function listModels(): Promise<void> {
 }
 
 export async function switchModel(name?: string): Promise<void> {
-  const { loadModels, switchActive } = await import('../storage/models.js')
-
   const data = loadModels()
   if (!data?.models?.length) {
     process.stderr.write(`sysai: No models configured. Run: sysai setup\n`)

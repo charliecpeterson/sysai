@@ -1,3 +1,6 @@
+import type { ModelMessage } from 'ai'
+export type { ModelMessage }
+
 // ── Model configuration ───────────────────────────────────────────────────────
 
 export type Provider = 'anthropic' | 'openai' | 'llamacpp' | 'openai-compatible'
@@ -92,12 +95,12 @@ export type ToolDecision = string
 
 export interface AgentResult {
   text: string
-  messages: unknown[]
+  messages: ModelMessage[]
 }
 
 export interface AgentOptions {
   systemPrompt: string
-  messages: unknown[]
+  messages: ModelMessage[]
   onToken: (token: string) => void
   onToolApproval: (toolCall: unknown) => Promise<ToolDecision>
   onToolResult?: (toolCall: unknown, result: string, elapsedMs: number) => void
@@ -116,7 +119,7 @@ export interface ApprovalOptions {
 
 export interface RunAgentWithUIOptions {
   systemPrompt: string
-  messages: unknown[]
+  messages: ModelMessage[]
   autoApprove?: boolean
   abortSignal?: AbortSignal
   rl: import('readline').Interface
