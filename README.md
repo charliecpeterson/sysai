@@ -2,7 +2,7 @@
 
 A lightweight CLI tool that gives you an AI assistant anywhere in your terminal. Type `?` and ask.
 
-Works everywhere your shell does.
+Works everywhere your shell does: SSH sessions, HPC clusters, containers, remote servers.
 
 ## Quick start
 
@@ -158,6 +158,92 @@ sysai <name>             — run a task
 sysai <name> --dry-run   — same as task test
 ```
 
+## MCP servers
+
+sysai is an MCP host — it can connect to any [Model Context Protocol](https://modelcontextprotocol.io) server and make its tools available to the AI agent alongside the built-in `bash`, `read_file`, and `write_file` tools.
+
+This lets you bring external capabilities (web search, databases, APIs, knowledge bases, etc.) without modifying sysai itself.
+
+### Adding an MCP server
+
+```bash
+sysai mcp add
+```
+
+Interactive wizard:
+```
+  Add MCP server
+
+  Name: weather
+  Command (e.g. npx, python): npx
+  Args (e.g. -y @example/weather-mcp, enter to skip): -y @some/weather-mcp
+  Env vars (KEY=val KEY2=val2, enter to skip): WEATHER_API_KEY=abc123
+  Description (optional): current weather via WeatherAPI
+```
+
+Server configs are stored in `~/.sysai/mcp.json` using the same format as Claude Desktop, so you can copy entries directly between them.
+
+### Using MCP tools
+
+Configured servers start automatically when you run `sysai` or `?`. The AI discovers their tools and uses them naturally:
+
+```
+$ ? what's the weather in Tokyo?
+  sysai ● claude-sonnet
+  mcp  weather (2 tools)
+
+  ● mcp   weather / get_current_weather  {"location":"Tokyo"}
+  call? [Y/n]: Y
+  ✓ 0.8s
+
+It's currently 18°C and overcast in Tokyo...
+```
+
+MCP tool calls show the server name, tool name, and arguments. `-y` auto-approves them like other tools.
+
+### Managing MCP servers
+
+```bash
+sysai mcp list            # show all configured servers
+sysai mcp add             # add a server (interactive wizard)
+sysai mcp remove <name>   # remove a server
+```
+
+### Example: knowledge base via MCP
+
+Rather than building RAG into sysai, you can use any RAG-capable MCP server:
+
+```bash
+# Install a document search MCP server
+npm i -g @some/rag-mcp-server
+
+sysai mcp add
+#  Name: docs
+#  Command: npx
+#  Args: -y @some/rag-mcp-server --path ~/docs
+```
+
+The AI can then search your documents when answering questions, grounded in your actual files rather than training data.
+
+### mcp.json format
+
+```json
+{
+  "servers": {
+    "weather": {
+      "command": "npx",
+      "args": ["-y", "@some/weather-mcp"],
+      "env": { "WEATHER_API_KEY": "your-key" },
+      "description": "current weather"
+    },
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+    }
+  }
+}
+```
+
 ## Configuration
 
 ### Model management
@@ -168,13 +254,13 @@ sysai supports multiple named model configurations. Switch between them instantl
 sysai setup     # add, remove, or change models
 sysai models    # list all configured models
 sysai model     # interactive picker to switch active model
-sysai model gpt-5.4   # switch directly by name
+sysai model claude-sonnet   # switch directly by name
 ```
 
 Example setup with multiple models:
 ```
   claude-sonnet   anthropic   claude-sonnet-4-6   ● active
-  gpt-5.4         openai      gpt-5.4
+  gpt-4o          openai      gpt-4o
   local-llama     llamacpp    llama3.2
 ```
 
@@ -186,7 +272,7 @@ Switch models without leaving your chat session:
 ```
 > /model
   1) claude-sonnet   anthropic   claude-sonnet-4-6   ← active
-  2) gpt-5.4         openai      gpt-5.4
+  2) gpt-4o          openai      gpt-4o
 
   Switch to (name or number):
 ```
@@ -204,13 +290,11 @@ sysai status
 ```
   sysai v0.1.0
 
-  source:  /Users/charlie/projects/sysai/src/commands
-
   checking models…
 
   ●  claude-sonnet   anthropic   claude-sonnet-4-6   ← active
-  ●  gpt-5.4         openai      gpt-5.4
-  ●  local-llama     llamacpp    llama3.2             connection refused
+  ●  gpt-4o          openai      gpt-4o
+  ●  local-llama     llamacpp    llama3.2
 
   env vars:
     SYSAI_MAX_TURNS       20 (default)  — max agent iterations per query
@@ -238,7 +322,6 @@ You can have multiple configs per provider — e.g., two OpenAI entries with dif
 
 ```bash
 sysai setup
-# a) Add model
 # Provider: 3 (Local)
 # Base URL: http://localhost:11434/v1
 # Model ID: llama3.2
@@ -294,13 +377,16 @@ Set `SYSAI_MAX_TURNS` in your environment to limit agent iterations (default: 20
      │
      ▼
   Loads ~/.sysai/instructions.md (if present)
+  Connects to MCP servers from ~/.sysai/mcp.json (if any)
      │
      ▼
-  Agentic loop: sends query + context + instructions to LLM with tools
+  Agentic loop: sends query + context + instructions to LLM
+  with built-in tools + any MCP tools
      │
-     ├─→ LLM calls bash → user approves → runs → output fed back (capped, start+end)
+     ├─→ LLM calls bash → user approves → runs → output fed back
      ├─→ LLM calls read_file with offset/limit → reads chunk → fed back
      ├─→ LLM calls write_file → shows diff → user approves → writes file
+     ├─→ LLM calls mcp__<server>__<tool> → user approves → MCP server executes
      └─→ LLM streams text → rendered with markdown formatting
 
 sysai doctor  (task)
@@ -312,13 +398,14 @@ sysai doctor  (task)
   Same agentic loop with collected output as context
 ```
 
-### Tools
+### Built-in tools
 
 | Tool | Approval | Description |
 |------|----------|-------------|
 | `bash` | ask user | Run any shell command. Output capped at 20k chars (start + end preserved). |
 | `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading of large files. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
+| `mcp__*__*` | ask user | Any tool exposed by a configured MCP server. Auto-approved with `-y`. |
 
 ### Context
 
@@ -350,6 +437,7 @@ Bash output over 20k chars is truncated with start + end preserved and a note to
 ~/.sysai/
 ├── bin/sysai          ← compiled binary (or symlink to main.ts when running from source)
 ├── models.json        ← named model configurations (chmod 600)
+├── mcp.json           ← MCP server configurations (created on first sysai mcp add)
 ├── shell.bash         ← shell integration (? function)
 ├── instructions.md    ← optional: custom instructions for the AI
 ├── tasks/             ← task files (doctor.md, jobcheck.md, yours…)
@@ -364,22 +452,28 @@ Plus one line added to `~/.bashrc` or `~/.zshrc`:
 ### CLI commands
 
 ```
-sysai install         — set up ~/.sysai, shell integration, and provider
-sysai ask <question>  — one-shot agentic query (used by ? shell function)
-sysai chat            — interactive chat with session history
-sysai setup           — add / remove / manage model configs
-sysai models          — list configured models
-sysai model [name]    — switch active model
-sysai status          — show models with live health check
-sysai tasks           — list saved tasks
-sysai task new        — create a task with AI assistance
-sysai task test <n>   — dry-run a task
-sysai task edit <n>   — edit a task file
-sysai task rm   <n>   — delete a task
-sysai <taskname>      — run a saved task
-sysai instructions    — edit ~/.sysai/instructions.md
-sysai --setup-shell   — write shell.bash and print source line
-sysai --version       — print version
+sysai install              — set up ~/.sysai, shell integration, and provider
+sysai ask <question>       — one-shot agentic query (used by ? shell function)
+sysai chat                 — interactive chat with session history
+
+sysai setup                — add / remove / manage model configs
+sysai models               — list configured models
+sysai model [name]         — switch active model
+sysai status               — show models with live health check
+
+sysai mcp list             — list configured MCP servers
+sysai mcp add              — add an MCP server (interactive wizard)
+sysai mcp remove <name>    — remove an MCP server
+
+sysai tasks                — list saved tasks
+sysai task new             — create a task with AI assistance
+sysai task test <name>     — dry-run a task
+sysai task edit <name>     — edit a task file
+sysai task rm   <name>     — delete a task
+sysai <taskname>           — run a saved task
+
+sysai instructions         — edit ~/.sysai/instructions.md
+sysai --version            — print version
 ```
 
 ### Uninstall
@@ -419,13 +513,16 @@ sysai/
 │   ├── commands/
 │   │   ├── ask.ts             ← one-shot ? query (agentic)
 │   │   ├── chat.ts            ← interactive chat with session management and tmux split
+│   │   ├── mcp.ts             ← mcp list / add / remove commands
 │   │   └── setup.ts           ← model setup wizard, status, list, switch
 │   ├── core/
 │   │   ├── agent.ts           ← agentic loop: streamText → tool calls → approval → execute
+│   │   ├── mcp-client.ts      ← MCP stdio client: connect, discover tools, forward calls
 │   │   ├── prompt.ts          ← system prompt + instructions.md loader
 │   │   └── provider.ts        ← AI SDK model instantiation (Anthropic, OpenAI, llama.cpp)
 │   ├── storage/
 │   │   ├── history.ts         ← JSONL session files, auto-managed
+│   │   ├── mcp.ts             ← MCP server configs (~/.sysai/mcp.json)
 │   │   └── models.ts          ← named model configs (~/.sysai/models.json)
 │   ├── env/
 │   │   └── context.ts         ← environment detection (OS, SLURM, tmux, SSH, container)
@@ -444,8 +541,7 @@ sysai/
 
 ## Requirements
 
-- Node.js 20+ (only needed when running from source without bun)
-- bun (for building binaries or running from source)
+- [bun](https://bun.sh) — required to run from source or build binaries
 - bash or zsh
 - tmux (optional — enables split-pane chat and terminal buffer context)
-- An API key for Anthropic or OpenAI, or a local model endpoint
+- An API key for Anthropic or OpenAI, or a local model endpoint (Ollama, llama.cpp)
