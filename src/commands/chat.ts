@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- * server.js — interactive agentic REPL
+ * chat.ts — interactive agentic REPL
  *
  * Started by ai-pane. Maintains conversation history in memory.
  * The agent can run bash commands, read files, and write files —
@@ -8,26 +8,28 @@
  */
 
 import readline  from 'readline'
+import type { Interface as RLInterface } from 'readline'
 import { spawnSync } from 'child_process'
 import { existsSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
-import { buildContext }   from './context.js'
-import { buildMessages, getSystemPrompt } from './prompt.js'
-import { makeApproval, runAgentWithUI } from './run.js'
+import { buildContext }   from '../env/context.js'
+import { buildMessages, getSystemPrompt } from '../core/prompt.js'
+import { makeApproval, runAgentWithUI } from '../ui/approval.js'
 import {
   createSession, appendTurn, listSessions, loadSession,
   lastSession, deleteSession, migrateOldHistory, pruneHistory,
   writeCompactedSession,
-} from './history.js'
-import { formatApiError } from './errors.js'
-import { VERSION } from './version.js'
-import { getActiveConfig } from './models.js'
-import { DEFAULTS } from './provider.js'
-import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
+} from '../storage/history.js'
+import { formatApiError } from '../ui/errors.js'
+import { VERSION } from '../version.js'
+import { getActiveConfig } from '../storage/models.js'
+import { DEFAULTS } from '../core/provider.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
+import type { Session } from '../types.js'
 
-async function main() {
+async function main(): Promise<void> {
   if (!process.argv.includes('--inline')) {
-    const isBundled = !process.argv[1]?.endsWith('.js')
+    const isBundled = !process.argv[1]?.endsWith('.js') && !process.argv[1]?.endsWith('.ts')
     const chatCmd = isBundled
       ? `${process.argv[1]} chat --inline`
       : `${process.execPath} ${process.argv[1]} chat --inline`
@@ -60,8 +62,8 @@ async function main() {
     // No tmux — fall through to inline
   }
 
-  let sessionHistory = []
-  let currentSession = null
+  let sessionHistory: unknown[] = []
+  let currentSession: Session | null = null
 
   // One-time migration from old history.jsonl
   migrateOldHistory()
@@ -84,7 +86,7 @@ async function main() {
     process.stdout.write(`${DIM}Resume? (y/N) ${RESET}`)
     const answer = await readLineOnce()
     if (answer.trim().toLowerCase() === 'y') {
-      sessionHistory = loadSession(last.file)
+      sessionHistory = loadSession(last.file) as unknown[]
       // Continue the existing session
       currentSession = { file: last.file, meta: { ts: last.ts, hostname: last.hostname, title: last.title, turns: last.turns } }
       process.stdout.write(`${DIM}Loaded ${last.turns} prior turns.${RESET}\n`)
@@ -104,11 +106,11 @@ async function main() {
     prompt: `${CYAN}>${RESET} `,
   })
 
-  let activeAbort = null
+  let activeAbort: AbortController | null = null
 
   rl.prompt()
 
-  rl.on('line', async (input) => {
+  rl.on('line', async (input: string) => {
     const question = input.trim()
 
     if (!question) {
@@ -119,7 +121,7 @@ async function main() {
     if (question.startsWith('/')) {
       const result = handleCommand(question, sessionHistory, rl, {
         getCurrentSession: () => currentSession,
-        setSession: (hist, sess) => { sessionHistory = hist; currentSession = sess },
+        setSession: (hist: unknown[], sess: Session | null) => { sessionHistory = hist; currentSession = sess },
       })
       if (result instanceof Promise) await result
       rl.prompt()
@@ -166,7 +168,7 @@ async function main() {
       if (sessionHistory.length > cap) sessionHistory = sessionHistory.slice(-cap)
     }
 
-    if (fullResponse) {
+    if (fullResponse && currentSession) {
       appendTurn(currentSession, { question, response: fullResponse })
     }
 
@@ -190,7 +192,15 @@ async function main() {
 
 // ── slash commands ────────────────────────────────────────────────────────────
 
-async function handleCommand(input, history, rl, { getCurrentSession, setSession }) {
+async function handleCommand(
+  input: string,
+  history: unknown[],
+  rl: RLInterface,
+  { getCurrentSession, setSession }: {
+    getCurrentSession: () => Session | null
+    setSession: (hist: unknown[], sess: Session | null) => void
+  }
+): Promise<void> {
   const parts = input.split(/\s+/)
   const [cmd, ...args] = parts
 
@@ -215,17 +225,22 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
       break
     }
 
-    case '/history':
-      if (history.length === 0) {
+    case '/history': {
+      const userMsgs = (history as Array<{ role: string; content?: unknown }>)
+        .filter(m => m.role === 'user' && typeof m.content === 'string')
+      if (userMsgs.length === 0) {
         process.stdout.write(`${DIM}No history this session.${RESET}\n`)
       } else {
-        process.stdout.write(`${DIM}${history.length / 2} turns this session.${RESET}\n`)
-        for (let i = 0; i < history.length; i += 2) {
-          const q = history[i]?.content?.split('\n## Question\n')[1]?.trim() ?? '(unknown)'
-          process.stdout.write(`  ${DIM}${Math.floor(i / 2) + 1}. ${q.slice(0, 80)}${RESET}\n`)
-        }
+        const s = userMsgs.length === 1 ? '' : 's'
+        process.stdout.write(`${DIM}${userMsgs.length} turn${s} this session.${RESET}\n`)
+        userMsgs.forEach((m, i) => {
+          const content = m.content as string
+          const q = content.split('\n## Question\n')[1]?.trim() ?? content.slice(0, 80)
+          process.stdout.write(`  ${DIM}${i + 1}. ${q.slice(0, 80)}${RESET}\n`)
+        })
       }
       break
+    }
 
     case '/sessions': {
       const sessions = listSessions()
@@ -259,8 +274,8 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
         break
       }
       const target = sessions[n - 1]
-      const loaded = loadSession(target.file)
-      const session = { file: target.file, meta: { ts: target.ts, hostname: target.hostname, title: target.title, turns: target.turns } }
+      const loaded = loadSession(target.file) as unknown[]
+      const session: Session = { file: target.file, meta: { ts: target.ts, hostname: target.hostname, title: target.title, turns: target.turns } }
       setSession(loaded, session)
       process.stdout.write(`${GREEN}Resumed:${RESET} ${target.title || '(untitled)'} ${DIM}(${target.turns} turns)${RESET}\n`)
       break
@@ -285,12 +300,14 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
     }
 
     case '/status': {
-      const { getActiveConfig } = await import('./models.js')
+      const { getActiveConfig } = await import('../storage/models.js')
       const activeCfg = getActiveConfig()
       const turns   = Math.floor(history.length / 2)
       const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
       const tokens  = Math.round(
-        history.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 200), 0) / 4
+        (history as Array<{ content?: unknown }>).reduce((sum: number, m) => {
+          return sum + (typeof m.content === 'string' ? m.content.length : 200)
+        }, 0) / 4
       )
       const hasInstr = existsSync(`${homedir()}/.sysai/instructions.md`)
       const provider = activeCfg?.provider ?? '?'
@@ -317,28 +334,31 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
       process.stdout.write(`${DIM}  Summarising ${Math.floor(older.length / 2)} older turns…${RESET}`)
       try {
         const { generateText } = await import('ai')
-        const { getModel }     = await import('./provider.js')
+        const { getModel }     = await import('../core/provider.js')
 
         // Extract readable text from all message types including tool calls/results
         const transcript = older.map(m => {
-          let text
-          if (typeof m.content === 'string') {
-            text = m.content.slice(0, 600)
-          } else if (Array.isArray(m.content)) {
-            text = m.content.map(p => {
-              if (p.type === 'text')        return p.text
-              if (p.type === 'tool-call')   return `[ran: ${p.toolName} ${JSON.stringify(p.input ?? {}).slice(0, 120)}]`
-              if (p.type === 'tool-result') return `[result: ${String(p.output?.value ?? p.result ?? '').slice(0, 200)}]`
-              return `[${p.type}]`
+          const msg = m as { role: string; content: unknown }
+          let text: string
+          if (typeof msg.content === 'string') {
+            text = msg.content.slice(0, 600)
+          } else if (Array.isArray(msg.content)) {
+            text = (msg.content as Array<Record<string, unknown>>).map(p => {
+              if (p['type'] === 'text')        return p['text'] as string
+              if (p['type'] === 'tool-call')   return `[ran: ${p['toolName']} ${JSON.stringify(p['input'] ?? {}).slice(0, 120)}]`
+              if (p['type'] === 'tool-result') return `[result: ${String((p['output'] as Record<string, unknown>)?.['value'] ?? p['result'] ?? '').slice(0, 200)}]`
+              return `[${p['type']}]`
             }).join(' ').slice(0, 600)
+          } else {
+            text = ''
           }
-          return `${m.role}: ${text}`
+          return `${msg.role}: ${text}`
         }).join('\n')
 
         const { text } = await generateText({
           model:     getModel(),
           prompt:    `Summarise this conversation concisely. Preserve key facts, commands run, findings, errors, and decisions:\n\n${transcript}`,
-          maxTokens: 600,
+          maxOutputTokens: 600,
         })
         const summarised = [
           { role: 'user',      content: '[Earlier conversation — summarised]' },
@@ -348,7 +368,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
         const currentSession = getCurrentSession()
         setSession(summarised, currentSession)
         // Persist the compacted history so resume after quit reflects the compact
-        writeCompactedSession(currentSession, summarised)
+        if (currentSession) writeCompactedSession(currentSession, summarised)
         process.stdout.write(`\r${GREEN}✓${RESET} Compacted to summary + last ${COMPACT_KEEP} turns.${' '.repeat(20)}\n`)
       } catch (err) {
         process.stdout.write(`\r${RED}Compact failed: ${formatApiError(err)}${RESET}\n`)
@@ -368,7 +388,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
     }
 
     case '/model': {
-      const { loadModels, switchActive } = await import('./models.js')
+      const { loadModels, switchActive } = await import('../storage/models.js')
       const data = loadModels()
       const models = data?.models ?? []
       if (models.length === 0) {
@@ -381,7 +401,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
           switchActive(targetName)
           process.stdout.write(`${GREEN}  ✓ Switched to ${BOLD}${targetName}${RESET}\n`)
         } catch (err) {
-          process.stdout.write(`${RED}  ${err.message}${RESET}\n`)
+          process.stdout.write(`${RED}  ${(err as Error).message}${RESET}\n`)
         }
         break
       }
@@ -389,12 +409,12 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
       process.stdout.write('\n')
       for (let i = 0; i < models.length; i++) {
         const m = models[i]
-        const active = m.name === data.active ? `  ${GREEN}← active${RESET}` : ''
+        const active = m.name === data?.active ? `  ${GREEN}← active${RESET}` : ''
         const modelId = m.model || `${DIM}${DEFAULTS[m.provider] ?? '?'}${RESET}`
         process.stdout.write(`  ${DIM}${i + 1})${RESET}  ${BOLD}${m.name}${RESET}  ${DIM}${m.provider}${RESET}  ${modelId}${active}\n`)
       }
       process.stdout.write('\n')
-      const answer = await new Promise(resolve => rl.question(`${DIM}  Switch to (name or number, Enter to cancel): ${RESET}`, resolve))
+      const answer = await new Promise<string>(resolve => rl.question(`${DIM}  Switch to (name or number, Enter to cancel): ${RESET}`, resolve))
       const trimmed = answer.trim()
       if (!trimmed) break
       const num = parseInt(trimmed)
@@ -404,7 +424,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
         switchActive(name)
         process.stdout.write(`${GREEN}  ✓ Switched to ${BOLD}${name}${RESET} ${DIM}(takes effect on next query)${RESET}\n`)
       } catch (err) {
-        process.stdout.write(`${RED}  ${err.message}${RESET}\n`)
+        process.stdout.write(`${RED}  ${(err as Error).message}${RESET}\n`)
       }
       break
     }
@@ -435,14 +455,14 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function readLineOnce() {
+function readLineOnce(): Promise<string> {
   return new Promise(resolve => {
     const tmp = readline.createInterface({ input: process.stdin, output: process.stdout })
-    tmp.once('line', (line) => { tmp.close(); resolve(line) })
+    tmp.once('line', (line: string) => { tmp.close(); resolve(line) })
   })
 }
 
 main().catch(err => {
-  console.error('sysai server error:', err.message)
+  console.error('sysai server error:', (err as Error).message)
   process.exit(1)
 })

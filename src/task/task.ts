@@ -1,5 +1,5 @@
 /**
- * task.js — task file parsing, listing, and execution
+ * task.ts — task file parsing, listing, and execution
  *
  * Tasks live at ~/.sysai/tasks/<name>.md
  * Format: YAML frontmatter (description, model, auto_run) + prompt body
@@ -10,9 +10,10 @@ import { homedir } from 'os'
 import { join, resolve, sep } from 'path'
 import { spawnSync } from 'child_process'
 import { createInterface } from 'readline'
-import { parseToolArgs } from './agent.js'
-import { formatApiError } from './errors.js'
-import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
+import { parseToolArgs } from '../core/agent.js'
+import { formatApiError } from '../ui/errors.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
+import type { Task, ToolDecision } from '../types.js'
 
 export const TASKS_DIR = join(homedir(), '.sysai', 'tasks')
 
@@ -20,7 +21,7 @@ export const TASKS_DIR = join(homedir(), '.sysai', 'tasks')
  * Resolve a task name to its file path and verify it stays inside TASKS_DIR.
  * Returns null if the name contains path traversal (e.g. '../../etc/passwd').
  */
-function safeTaskPath(name) {
+function safeTaskPath(name: string): string | null {
   const resolved = resolve(join(TASKS_DIR, `${name}.md`))
   return resolved.startsWith(TASKS_DIR + sep) ? resolved : null
 }
@@ -29,13 +30,13 @@ function safeTaskPath(name) {
  * Parse a task markdown file.
  * Returns { name, description, model, auto_run, prompt }
  */
-export function parseTask(content, name = '') {
+export function parseTask(content: string, name = ''): Task {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) return { name, description: name, model: null, auto_run: [], prompt: content.trim() }
 
   const frontmatter = match[1]
   const body        = match[2].trim()
-  const meta        = { auto_run: [] }
+  const meta: Record<string, unknown> & { auto_run: string[] } = { auto_run: [] }
   let inAutoRun     = false
 
   for (const line of frontmatter.split('\n')) {
@@ -50,35 +51,35 @@ export function parseTask(content, name = '') {
   }
 
   return {
-    name:        meta.name        || name,
-    description: meta.description || name,
-    model:       meta.model       || null,
+    name:        (meta.name        as string) || name,
+    description: (meta.description as string) || name,
+    model:       (meta.model       as string) || null,
     auto_run:    meta.auto_run,
     prompt:      body,
   }
 }
 
-export function loadTask(name) {
+export function loadTask(name: string): Task | null {
   const path = safeTaskPath(name)
   if (!path || !existsSync(path)) return null
   try { return parseTask(readFileSync(path, 'utf8'), name) } catch { return null }
 }
 
-export function listTasks() {
+export function listTasks(): Task[] {
   if (!existsSync(TASKS_DIR)) return []
   return readdirSync(TASKS_DIR)
     .filter(f => f.endsWith('.md'))
     .map(f => {
       const name = f.replace(/\.md$/, '')
       try { return parseTask(readFileSync(join(TASKS_DIR, f), 'utf8'), name) }
-      catch { return { name, description: name, auto_run: [], prompt: '' } }
+      catch { return { name, description: name, model: null, auto_run: [], prompt: '' } }
     })
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 // ── task commands ─────────────────────────────────────────────────────────────
 
-export async function listTasksCmd() {
+export async function listTasksCmd(): Promise<void> {
   const tasks = listTasks()
   if (tasks.length === 0) {
     process.stdout.write(`No tasks found. Create one with: ${CYAN}sysai task new${RESET}\n`)
@@ -92,7 +93,7 @@ export async function listTasksCmd() {
   process.stdout.write(`\n  ${DIM}Run with: sysai <name>   •   sysai <name> --dry-run to preview${RESET}\n\n`)
 }
 
-export async function taskCmd([sub, ...args]) {
+export async function taskCmd([sub, ...args]: string[]): Promise<void> {
   if (sub === 'new')              { await taskDesigner(); return }
   if (sub === 'test' && args[0])  { await runTaskCmd(await requireTask(args[0]), { dryRun: true }); return }
   if (sub === 'edit' && args[0])  { await taskEdit(args[0]); return }
@@ -107,13 +108,13 @@ export async function taskCmd([sub, ...args]) {
   ].join('\n'))
 }
 
-export async function requireTask(name) {
+export async function requireTask(name: string): Promise<Task> {
   const task = loadTask(name)
   if (!task) { process.stderr.write(`sysai: no task named "${name}"\n`); process.exit(1) }
   return task
 }
 
-export async function taskEdit(name) {
+export async function taskEdit(name: string): Promise<void> {
   const path = safeTaskPath(name)
   if (!path) { process.stderr.write(`${RED}sysai: invalid task name "${name}"${RESET}\n`); return }
   mkdirSync(TASKS_DIR, { recursive: true })
@@ -123,17 +124,17 @@ export async function taskEdit(name) {
   spawnSync(process.env.VISUAL || process.env.EDITOR || 'vi', [path], { stdio: 'inherit' })
 }
 
-export async function taskRm(name) {
+export async function taskRm(name: string): Promise<void> {
   const path = safeTaskPath(name)
   if (!path || !existsSync(path)) { process.stderr.write(`${RED}sysai: no task named "${name}"${RESET}\n`); return }
   unlinkSync(path)
   process.stdout.write(`${GREEN}  ✓ Deleted task "${name}"${RESET}\n`)
 }
 
-export async function runTaskCmd(task, { dryRun = false } = {}) {
-  const { buildContext }  = await import('./context.js')
-  const { buildMessages, getSystemPrompt } = await import('./prompt.js')
-  const { runAgentWithUI } = await import('./run.js')
+export async function runTaskCmd(task: Task, { dryRun = false } = {}): Promise<void> {
+  const { buildContext }  = await import('../env/context.js')
+  const { buildMessages, getSystemPrompt } = await import('../core/prompt.js')
+  const { runAgentWithUI } = await import('../ui/approval.js')
 
   const shell = process.env.SHELL || 'bash'
 
@@ -144,7 +145,7 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
     for (const cmd of task.auto_run) {
       const r = spawnSync(shell, ['-c', cmd], { encoding: 'utf8', env: process.env, timeout: autoRunTimeout })
       const out = ((r.stdout || '') + (r.stderr || '')).trim()
-      const timedOut = r.signal === 'SIGTERM' || r.error?.code === 'ETIMEDOUT'
+      const timedOut = r.signal === 'SIGTERM' || (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
       const suffix = timedOut ? '\n[killed: exceeded timeout]' : ''
       autoRunOutput += `$ ${cmd}\n${out || '(no output)'}${suffix}\n\n`
     }
@@ -159,7 +160,7 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
       process.stdout.write(`${DIM}  (no auto_run commands)${RESET}\n`)
     }
     const rl2 = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
-    const answer = await new Promise(resolve => rl2.question(`\n${DIM}Continue with AI analysis? [Y/n]: ${RESET}`, resolve))
+    const answer = await new Promise<string>(resolve => rl2.question(`\n${DIM}Continue with AI analysis? [Y/n]: ${RESET}`, resolve))
     rl2.close()
     if (answer.trim().toLowerCase() === 'n') return
     process.stdout.write('\n')
@@ -235,25 +236,25 @@ GUIDELINES:
 - Suggest a short lowercase task name (hyphens ok, no spaces, no .md extension)
 - Only collect in auto_run what the AI actually needs — keep it focused`
 
-export async function taskDesigner() {
-  const { buildContext }  = await import('./context.js')
-  const { buildMessages } = await import('./prompt.js')
-  const { makeApproval, runAgentWithUI } = await import('./run.js')
-  const { runAgent }      = await import('./agent.js')
-  const { createSpinner, StreamRenderer } = await import('./render.js')
+export async function taskDesigner(): Promise<void> {
+  const { buildContext }  = await import('../env/context.js')
+  const { buildMessages } = await import('../core/prompt.js')
+  const { makeApproval, runAgentWithUI } = await import('../ui/approval.js')
+  const { runAgent }      = await import('../core/agent.js')
+  const { createSpinner, StreamRenderer } = await import('../ui/render.js')
 
   mkdirSync(TASKS_DIR, { recursive: true })
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
-  const prompt = (q) => new Promise(resolve => rl.question(q, resolve))
+  const prompt = (q: string) => new Promise<string>(resolve => rl.question(q, resolve))
 
   process.stdout.write(`\n  ${CYAN}${BOLD}sysai task designer${RESET}`)
   process.stdout.write(`  ${DIM}back-and-forth with AI — type your goal, refine, then save${RESET}\n`)
   process.stdout.write(`  ${DIM}Ctrl+C to cancel${RESET}\n\n`)
 
   const context = await buildContext({ questionHint: 'task design' })
-  let history   = []
-  let activeAbort = null
+  let history: unknown[]         = []
+  let activeAbort: AbortController | null = null
 
   const onSigint = () => {
     if (activeAbort) { activeAbort.abort(); return }
@@ -270,9 +271,10 @@ export async function taskDesigner() {
   })
 
   // Override write_file display to show green "writing task" message
-  const designerApproval = async (toolUse) => {
-    const name = toolUse.toolName
-    const args = parseToolArgs(toolUse.input ?? toolUse.args)
+  const designerApproval = async (toolUse: unknown): Promise<ToolDecision> => {
+    const tu   = toolUse as { toolName: string; input?: unknown; args?: unknown }
+    const name = tu.toolName
+    const args = parseToolArgs(tu.input ?? tu.args)
 
     if (name === 'write_file') {
       process.stdout.write(`\n${GREEN}  ● write  ${BOLD}${args.path}${RESET}\n`)
@@ -285,7 +287,7 @@ export async function taskDesigner() {
   const spinner  = process.stderr.isTTY ? createSpinner(s => process.stderr.write(s)) : null
   const renderer = process.stdout.isTTY ? new StreamRenderer(s => process.stdout.write(s)) : null
 
-  const runTurn = async (messages) => {
+  const runTurn = async (messages: unknown[]): Promise<unknown[]> => {
     activeAbort = new AbortController()
     try {
       const result = await runAgent({
@@ -293,7 +295,7 @@ export async function taskDesigner() {
         messages,
         onThinking:     () => spinner?.start(),
         onThinkingDone: () => spinner?.stop(),
-        onToken:        process.stdout.isTTY ? t => renderer.write(t) : t => process.stdout.write(t),
+        onToken:        process.stdout.isTTY ? t => renderer!.write(t) : t => process.stdout.write(t),
         onToolApproval: designerApproval,
         onToolResult:   (_, __, ms) => { if (process.stderr.isTTY) process.stderr.write(`${DIM}  ✓ ${(ms/1000).toFixed(1)}s${RESET}\n`) },
         abortSignal: activeAbort.signal,

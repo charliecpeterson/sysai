@@ -1,7 +1,8 @@
 import { readFileSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { formatContext } from './context.js'
+import { formatContext } from '../env/context.js'
+import type { Context } from '../types.js'
 
 const INSTRUCTIONS_PATH = join(homedir(), '.sysai', 'instructions.md')
 
@@ -43,7 +44,7 @@ FORMAT:
 - NEVER suggest commands in code blocks — always run them via the bash tool instead
 - File paths in \`backticks\``
 
-function loadInstructions() {
+function loadInstructions(): string | null {
   try {
     if (existsSync(INSTRUCTIONS_PATH)) {
       return readFileSync(INSTRUCTIONS_PATH, 'utf8').trim()
@@ -52,47 +53,35 @@ function loadInstructions() {
   return null
 }
 
-export function getSystemPrompt() {
+export function getSystemPrompt(): string {
   const instructions = loadInstructions()
   if (!instructions) return BASE_PROMPT
   return BASE_PROMPT + `\n\nUSER INSTRUCTIONS (from ~/.sysai/instructions.md):\n${instructions}`
 }
 
 /**
- * Build the messages array for the Claude API call.
- *
- * @param {object} opts
- * @param {object} opts.context     - context object from context.js
- * @param {string} opts.question    - the user's question
- * @param {Array}  [opts.history]   - prior conversation turns [{role, content}]
- * @returns {Array} messages array for Claude API
+ * Build the messages array for the LLM API call.
  */
-export function buildMessages({ context, question, history = [] }) {
-  // Build the user content block
-  const parts = []
+export function buildMessages({ context, question, history = [] }: {
+  context: Context
+  question: string
+  history?: unknown[]
+}): unknown[] {
+  const parts: string[] = []
 
-  // Environment block — always included
-  const envBlock = formatContext(context)
-  parts.push(`## Environment\n${envBlock}`)
+  parts.push(`## Environment\n${formatContext(context)}`)
 
-  // Terminal buffer — if available
   if (context.terminal_buffer) {
     parts.push(`## Terminal output (recent)\n\`\`\`\n${context.terminal_buffer}\n\`\`\``)
   }
 
-  // Piped stdin — if available
   if (context.stdin_pipe) {
     parts.push(`## Piped input\n\`\`\`\n${context.stdin_pipe}\n\`\`\``)
   }
 
-  // The actual question
   parts.push(`## Question\n${question}`)
 
-  const userMessage = {
-    role: 'user',
-    content: parts.join('\n\n'),
-  }
+  const userMessage = { role: 'user', content: parts.join('\n\n') }
 
-  // For one-shot queries, no history. For pane sessions, include history.
   return [...history, userMessage]
 }

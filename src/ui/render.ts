@@ -1,5 +1,5 @@
 /**
- * render.js — spinner, streaming markdown renderer, and write diff
+ * render.ts — spinner, streaming markdown renderer, and write diff
  */
 import { readFileSync, existsSync, writeFileSync, mkdtempSync, unlinkSync, rmdirSync } from 'fs'
 import { tmpdir } from 'os'
@@ -7,15 +7,17 @@ import { join }   from 'path'
 import { spawnSync } from 'child_process'
 import { RESET, BOLD, DIM, GREEN, RED, CYAN } from './colors.js'
 
-export { RESET, BOLD, DIM }  // re-export for callers that import colors from render.js
+export { RESET, BOLD, DIM }  // re-export for callers that import colors from render.ts
+
+type WriteFn = (s: string) => void
 
 const CLEAR_LINE = '\x1b[2K\r'
 const FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
 
 // ── Spinner ───────────────────────────────────────────────────────────────────
 
-export function createSpinner(writeFn) {
-  let timer = null
+export function createSpinner(writeFn: WriteFn) {
+  let timer: ReturnType<typeof setInterval> | null = null
   let frame = 0
   let startedAt = 0
 
@@ -45,7 +47,7 @@ export function createSpinner(writeFn) {
 
 const DIFF_CAP = 40   // max lines shown
 
-function showAllGreen(content, writeFn) {
+function showAllGreen(content: string, writeFn: WriteFn): void {
   const lines = content.split('\n')
   const show  = lines.slice(0, DIFF_CAP)
   for (const l of show) writeFn(`${GREEN}+ ${l}${RESET}`)
@@ -53,7 +55,7 @@ function showAllGreen(content, writeFn) {
     writeFn(`${DIM}  … ${lines.length - DIFF_CAP} more lines${RESET}`)
 }
 
-export function renderWriteDiff(filePath, newContent, writeFn) {
+export function renderWriteDiff(filePath: string, newContent: string, writeFn: WriteFn): void {
   if (!existsSync(filePath)) {
     showAllGreen(newContent, writeFn)
     return
@@ -68,7 +70,6 @@ export function renderWriteDiff(filePath, newContent, writeFn) {
     const r = spawnSync('diff', ['-u', '--label', filePath, '--label', filePath, oldFile, newFile],
       { encoding: 'utf8' })
 
-    // r.status === null means diff binary not found; fall through to plain display
     if (r.status === null) {
       showAllGreen(newContent, writeFn)
       return
@@ -104,15 +105,15 @@ const H2      = '\x1b[1m'
 const CODE_BG = '\x1b[48;5;236m\x1b[38;5;252m'
 
 export class StreamRenderer {
-  #write
+  #write: WriteFn
   #buf = ''
   #inCode = false
 
-  constructor(writeFn) { this.#write = writeFn }
+  constructor(writeFn: WriteFn) { this.#write = writeFn }
 
-  write(token) {
+  write(token: string): void {
     this.#buf += token
-    let nl
+    let nl: number
     while ((nl = this.#buf.indexOf('\n')) !== -1) {
       this.#line(this.#buf.slice(0, nl))
       this.#write('\n')
@@ -120,11 +121,11 @@ export class StreamRenderer {
     }
   }
 
-  flush() {
+  flush(): void {
     if (this.#buf) { this.#line(this.#buf); this.#buf = '' }
   }
 
-  #line(line) {
+  #line(line: string): void {
     if (line.trimStart().startsWith('```')) {
       this.#inCode = !this.#inCode
       this.#write((this.#inCode ? CODE_BG : RESET) + line + RESET)
@@ -132,16 +133,12 @@ export class StreamRenderer {
     }
     if (this.#inCode) { this.#write(CODE_BG + line + RESET); return }
 
-    // headings
-    let m
+    let m: RegExpMatchArray | null
     if ((m = line.match(/^### (.+)/))) { this.#write(H2 + m[1] + RESET); return }
     if ((m = line.match(/^## (.+)/)))  { this.#write(H1 + m[1] + RESET); return }
     if ((m = line.match(/^# (.+)/)))   { this.#write('\n' + H1 + m[1] + RESET); return }
 
-    // bullets
-    line = line.replace(/^(\s*)[*-] /, (_, indent) => indent + `${DIM}•${RESET} `)
-
-    // inline bold, code
+    line = line.replace(/^(\s*)[*-] /, (_, indent: string) => indent + `${DIM}•${RESET} `)
     line = line.replace(/\*\*([^*\n]+)\*\*/g, `${BOLD}$1${RESET}`)
     line = line.replace(/`([^`\n]+)`/g, `${CYAN}$1${RESET}`)
 

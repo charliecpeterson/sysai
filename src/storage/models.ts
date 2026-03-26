@@ -1,5 +1,5 @@
 /**
- * models.js — named model configuration list
+ * models.ts — named model configuration list
  *
  * Stores configs in ~/.sysai/models.json:
  *   { active: "claude-sonnet", models: [{ name, provider, model, apiKey, baseUrl }, …] }
@@ -8,31 +8,32 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join }    from 'path'
+import type { ModelConfig, ModelsData } from '../types.js'
 
 export const MODELS_PATH = join(homedir(), '.sysai', 'models.json')
 
-let _cache = null
+let _cache: ModelsData | null = null
 
-export function loadModels() {
+export function loadModels(): ModelsData | null {
   if (!existsSync(MODELS_PATH)) return null
   if (_cache) return _cache
   try { _cache = JSON.parse(readFileSync(MODELS_PATH, 'utf8')); return _cache } catch { return null }
 }
 
-export function saveModels(data) {
+export function saveModels(data: ModelsData): void {
   _cache = data  // keep cache consistent with what we write
   mkdirSync(join(homedir(), '.sysai'), { recursive: true })
   writeFileSync(MODELS_PATH, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
 }
 
 /** Returns the active model config object, or null if no models.json exists. */
-export function getActiveConfig() {
+export function getActiveConfig(): ModelConfig | null {
   const data = loadModels()
   if (!data?.models?.length) return null
   return data.models.find(m => m.name === data.active) ?? data.models[0]
 }
 
-export function switchActive(name) {
+export function switchActive(name: string): void {
   const data = loadModels()
   if (!data) throw new Error('No models configured. Run: sysai setup')
   if (!data.models.find(m => m.name === name))
@@ -41,7 +42,7 @@ export function switchActive(name) {
   saveModels(data)
 }
 
-export function addModel(cfg) {
+export function addModel(cfg: ModelConfig): void {
   const data = loadModels() ?? { active: cfg.name, models: [] }
   const idx = data.models.findIndex(m => m.name === cfg.name)
   if (idx >= 0) data.models[idx] = cfg
@@ -50,7 +51,7 @@ export function addModel(cfg) {
   saveModels(data)
 }
 
-export function removeModel(name) {
+export function removeModel(name: string): void {
   const data = loadModels()
   if (!data) return
   data.models = data.models.filter(m => m.name !== name)

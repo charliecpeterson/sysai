@@ -27,12 +27,12 @@ for entry in "${targets[@]}"; do
   target=$(echo "$entry" | awk '{print $1}')
   outname=$(echo "$entry" | awk '{print $2}')
   echo "  → $outname"
-  bun build --compile --minify --target="$target" main.js --outfile "$DIST/$outname" 2>/dev/null
+  bun build --compile --minify --target="$target" main.ts --outfile "$DIST/$outname" 2>/dev/null
 done
 
 echo ""
 echo "Built:"
 ls -lh "$DIST"/sysai-* 2>/dev/null | awk '{print "  " $5 "  " $9}'
 echo ""
-echo "Install locally:   node main.js install"
+echo "Install locally:   bun run main.ts install"
 echo "Deploy to remote:  scp dist/sysai-linux-x64 <host>:/tmp/sysai && ssh <host> '/tmp/sysai install'"

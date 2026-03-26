@@ -1,14 +1,15 @@
 /**
- * provider.js — model selection
+ * provider.ts — model selection
  *
- * Reads from ~/.sysai/models.json via models.js
+ * Reads from ~/.sysai/models.json via models.ts
  */
 
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI }    from '@ai-sdk/openai'
-import { getActiveConfig } from './models.js'
+import { getActiveConfig } from '../storage/models.js'
+import type { ModelConfig } from '../types.js'
 
-export const DEFAULTS = {
+export const DEFAULTS: Record<string, string> = {
   anthropic: 'claude-sonnet-4-6',
   openai:    'gpt-4o',
   llamacpp:  'local',
@@ -16,9 +17,8 @@ export const DEFAULTS = {
 
 /**
  * Build an AI SDK model instance from a config object.
- * @param {{ provider, model?, apiKey?, baseUrl? }} cfg
  */
-export function getModelInstance(cfg) {
+export function getModelInstance(cfg: ModelConfig) {
   const modelName = cfg.model
   switch (cfg.provider) {
     case 'anthropic': {
@@ -50,7 +50,7 @@ export function getModel() {
   }
   try { return getModelInstance(activeCfg) }
   catch (err) {
-    console.error(`sysai: ${err.message}`)
+    console.error(`sysai: ${(err as Error).message}`)
     console.error('       Run: sysai setup')
     process.exit(1)
   }

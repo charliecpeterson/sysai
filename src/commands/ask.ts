@@ -1,6 +1,6 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- * cli.js — agentic one-shot query
+ * ask.ts — agentic one-shot query
  *
  * Usage:
  *   ? why is load high
@@ -9,14 +9,14 @@
 
 import { readFileSync, createReadStream } from 'fs'
 import readline from 'readline'
-import { buildContext }   from './context.js'
-import { buildMessages, getSystemPrompt } from './prompt.js'
-import { runAgentWithUI } from './run.js'
-import { formatApiError } from './errors.js'
-import { getActiveConfig } from './models.js'
-import { BOLD, DIM, CYAN, RESET, RED } from './colors.js'
+import { buildContext }   from '../env/context.js'
+import { buildMessages, getSystemPrompt } from '../core/prompt.js'
+import { runAgentWithUI } from '../ui/approval.js'
+import { formatApiError } from '../ui/errors.js'
+import { getActiveConfig } from '../storage/models.js'
+import { BOLD, DIM, CYAN, RESET, RED } from '../ui/colors.js'
 
-async function main() {
+async function main(): Promise<void> {
   const args        = process.argv.slice(2)
   const autoApprove = args.includes('-y') || args.includes('--yes')
   // Strip flags before joining remaining args as the question
@@ -80,20 +80,20 @@ async function main() {
   process.exit(0)
 }
 
-function parseFlag(args, flag) {
+function parseFlag(args: string[], flag: string): string | null {
   const idx = args.indexOf(flag)
   if (idx === -1 || idx + 1 >= args.length) return null
   return args[idx + 1]
 }
 
 // Remove a --flag and its value from an args array
-function stripFlag(args, flag) {
+function stripFlag(args: string[], flag: string): string[] {
   const idx = args.indexOf(flag)
   if (idx === -1) return args
   return [...args.slice(0, idx), ...args.slice(idx + 2)]
 }
 
 main().catch(err => {
-  console.error('sysai error:', err.message)
+  console.error('sysai error:', (err as Error).message)
   process.exit(1)
 })

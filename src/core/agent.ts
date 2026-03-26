@@ -1,20 +1,24 @@
 /**
- * agent.js — agentic loop using Vercel AI SDK
+ * agent.ts — agentic loop using Vercel AI SDK
  *
  * Tools: bash, read_file, write_file
- * Works with any provider (Anthropic, OpenAI, llama.cpp) via provider.js
+ * Works with any provider (Anthropic, OpenAI, llama.cpp) via provider.ts
  */
 
 import { streamText, tool } from 'ai'
+import type { ModelMessage } from 'ai'
 import { z }                 from 'zod'
 import { spawn }             from 'child_process'
 import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
-import { DIM, YELLOW, RESET } from './colors.js'
+import { DIM, YELLOW, RESET } from '../ui/colors.js'
+import type { AgentOptions, AgentResult } from '../types.js'
 
 const MAX_ITERATIONS   = parseInt(process.env.SYSAI_MAX_TURNS || '20')
 const MAX_FILE_READ    = 20_000  // chars
 const BASH_TIMEOUT_MS  = parseInt(process.env.SYSAI_BASH_TIMEOUT || '120') * 1000
+const MAX_RETRIES      = 3
+const RETRY_BASE_MS    = 1_000
 
 const TOOLS = {
   bash: tool({
@@ -49,18 +53,13 @@ then request specific sections based on what you find. Never assume truncated ou
 
 /**
  * Run the agentic loop until the model stops with 'stop' or 'end_turn'.
- *
- * @param {object}   opts
- * @param {string}   opts.systemPrompt
- * @param {Array}    opts.messages         — CoreMessage array
- * @param {function} opts.onToken          — (token: string) => void
- * @param {function} opts.onToolApproval   — async (toolCall) => 'approved' | 'rejected' | '<edited command>'
- * @param {function} [opts.onToolResult]   — (toolCall, result: string) => void
- * @returns {Promise<{text: string, messages: Array}>}
  */
-export async function runAgent({ systemPrompt, messages, onToken, onToolApproval, onToolResult, onThinking, onThinkingDone, abortSignal }) {
+export async function runAgent({
+  systemPrompt, messages, onToken, onToolApproval, onToolResult,
+  onThinking, onThinkingDone, abortSignal,
+}: AgentOptions): Promise<AgentResult> {
   const model   = getModel()
-  const history = [...messages]
+  const history = [...messages] as ModelMessage[]
   let fullText  = ''
   let iterations = 0
 
@@ -68,41 +67,45 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
     onThinking?.()
     let thinkingDone = false
 
-    const result = streamText({
-      model,
-      system:    systemPrompt,
-      messages:  history,
-      tools:     TOOLS,
-      maxTokens: parseInt(process.env.SYSAI_MAX_TOKENS || '8192'),
-      ...(abortSignal && { abortSignal }),
-    })
-
-    try {
-      // Stream text as it arrives
-      for await (const textChunk of result.textStream) {
-        if (!textChunk) continue
-        if (!thinkingDone) { thinkingDone = true; onThinkingDone?.() }
-        fullText += textChunk
-        onToken(textChunk)
+    // Retry the API call on transient errors, but only before any tokens have
+    // been emitted — mid-stream errors are rethrown to avoid duplicating output.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let result!: ReturnType<typeof streamText<any, any>>
+    for (let attempt = 0; ; attempt++) {
+      if (attempt > 0) await sleep(RETRY_BASE_MS * 2 ** (attempt - 1))
+      result = streamText({
+        model,
+        system:    systemPrompt,
+        messages:  history,
+        tools:     TOOLS,
+        maxOutputTokens: parseInt(process.env.SYSAI_MAX_TOKENS || '8192'),
+        ...(abortSignal && { abortSignal }),
+      })
+      try {
+        for await (const textChunk of result.textStream) {
+          if (!textChunk) continue
+          if (!thinkingDone) { thinkingDone = true; onThinkingDone?.() }
+          fullText += textChunk
+          onToken(textChunk)
+        }
+        break  // stream completed successfully
+      } catch (err) {
+        if (!thinkingDone && isRetryable(err) && attempt < MAX_RETRIES) continue
+        if (!thinkingDone) onThinkingDone?.()
+        throw err
       }
-    } catch (err) {
-      if (!thinkingDone) onThinkingDone?.()   // always clear spinner on abort/error
-      throw err
     }
 
-    // No text tokens — pure tool-call turn: clear spinner before approval prompts
     if (!thinkingDone) { thinkingDone = true; onThinkingDone?.() }
 
-    // Collect results once streaming is done
     const [finishReason, toolCalls, response] = await Promise.all([
       result.finishReason,
       result.toolCalls,
       result.response,
     ])
 
-    // Add assistant message to history.
     // Strip SDK-internal extra fields (providerMetadata, title, etc.) that
-    // Zod 4 strict mode rejects when the messages are re-validated on the next turn.
+    // Zod 4 strict mode rejects when messages are re-validated on the next turn.
     const normalized = response.messages.map(msg => {
       if (msg.role !== 'assistant' || !Array.isArray(msg.content)) {
         return { role: msg.role, content: msg.content }
@@ -115,7 +118,7 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
               type: 'tool-call',
               toolCallId: part.toolCallId,
               toolName:   part.toolName,
-              input:      part.input ?? part.args,
+              input:      part.input ?? (part as unknown as Record<string, unknown>)['args'],
             }
           }
           if (part.type === 'text') return { type: 'text', text: part.text }
@@ -123,9 +126,9 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
         }),
       }
     })
-    history.push(...normalized)
+    history.push(...(normalized as ModelMessage[]))
 
-    if (finishReason === 'stop' || finishReason === 'end_turn' || toolCalls.length === 0) {
+    if (finishReason === 'stop' || toolCalls.length === 0) {
       return { text: fullText, messages: history }
     }
 
@@ -134,12 +137,11 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
       return { text: fullText, messages: history }
     }
 
-    // Handle tool calls with approval
-    const toolResultParts = []
+    const toolResultParts: unknown[] = []
 
     for (const call of toolCalls) {
       const decision = await onToolApproval(call)
-      let resultContent
+      let resultContent: string
 
       if (decision === 'rejected') {
         resultContent = 'User rejected this tool call.'
@@ -149,11 +151,10 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
           : { ...call, input: { command: decision } }
 
         const t0 = Date.now()
-        resultContent = await executeTool(finalCall)
+        resultContent = await executeTool(finalCall as typeof call)
         onToolResult?.(finalCall, resultContent, Date.now() - t0)
       }
 
-      // AI SDK v6: tool results use `output: { type, value }` not `result`
       toolResultParts.push({
         type:       'tool-result',
         toolCallId: call.toolCallId,
@@ -162,48 +163,49 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
       })
     }
 
-    history.push({ role: 'tool', content: toolResultParts })
+    history.push({ role: 'tool', content: toolResultParts } as unknown as ModelMessage)
   }
+
+  return { text: fullText, messages: history }
 }
 
 // ── tool execution ────────────────────────────────────────────────────────────
 
-export function parseToolArgs(raw) {
+export function parseToolArgs(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
     try { return JSON.parse(raw) } catch { return {} }
   }
-  return raw ?? {}
+  return (raw as Record<string, unknown>) ?? {}
 }
 
-async function executeTool(call) {
+async function executeTool(call: { toolName: string; input?: unknown; args?: unknown }): Promise<string> {
   const args = parseToolArgs(call.input ?? call.args)
 
   switch (call.toolName) {
     case 'bash':
       if (!args.command) return 'Error: no command provided'
-      return executeBash(args.command)
+      return executeBash(args.command as string)
 
     case 'read_file': {
       if (!args.path) return 'Error: no path provided'
       try {
-        const MAX_READ_BYTES = 10 * 1024 * 1024  // 10 MB — refuse to load larger files into memory
-        const stat = statSync(args.path)
+        const MAX_READ_BYTES = 10 * 1024 * 1024  // 10 MB
+        const stat = statSync(args.path as string)
         if (stat.size > MAX_READ_BYTES) {
           return `Error: file is ${(stat.size / 1024 / 1024).toFixed(1)} MB — too large to read directly. Use bash with tail/grep/awk to read specific sections.`
         }
-        const content = readFileSync(args.path, 'utf8')
+        const content = readFileSync(args.path as string, 'utf8')
         const allLines = content.split('\n')
         const totalLines = allLines.length
 
-        const start  = Math.max(0, (args.offset ?? 1) - 1)
-        const count  = args.limit ?? totalLines
+        const start  = Math.max(0, ((args.offset as number) ?? 1) - 1)
+        const count  = (args.limit as number) ?? totalLines
         const slice  = allLines.slice(start, start + count)
         const end    = start + slice.length
 
         const header = `[${args.path} — lines ${start + 1}–${end} of ${totalLines.toLocaleString()} total]`
         const body   = slice.join('\n')
 
-        // Warn if a single chunk is still very large
         const combined = header + '\n' + body
         if (combined.length > MAX_FILE_READ) {
           const half = MAX_FILE_READ / 2
@@ -215,17 +217,17 @@ async function executeTool(call) {
         }
         return combined
       } catch (err) {
-        return `Error: ${err.message}`
+        return `Error: ${(err as Error).message}`
       }
     }
 
     case 'write_file': {
       if (!args.path) return 'Error: no path provided'
       try {
-        writeFileSync(args.path, args.content ?? '', 'utf8')
+        writeFileSync(args.path as string, (args.content as string) ?? '', 'utf8')
         return `Written: ${args.path}`
       } catch (err) {
-        return `Error: ${err.message}`
+        return `Error: ${(err as Error).message}`
       }
     }
 
@@ -237,7 +239,7 @@ async function executeTool(call) {
 const MAX_DISPLAY_LINES = 10
 const MAX_BASH_OUTPUT   = 20_000   // chars sent to AI
 
-function executeBash(command) {
+function executeBash(command: string): Promise<string> {
   return new Promise((resolve) => {
     const shell = process.env.SHELL || 'bash'
     const proc = spawn(shell, ['-c', command], {
@@ -247,18 +249,16 @@ function executeBash(command) {
 
     let output = ''
     let killed = false
-    proc.stdout.on('data', (data) => { output += data.toString() })
-    proc.stderr.on('data', (data) => { output += data.toString() })
+    proc.stdout.on('data', (data: Buffer) => { output += data.toString() })
+    proc.stderr.on('data', (data: Buffer) => { output += data.toString() })
 
-    // Kill hung commands after BASH_TIMEOUT_MS (default 120s, set SYSAI_BASH_TIMEOUT to override)
     const timer = setTimeout(() => {
       killed = true
       proc.kill('SIGTERM')
-      // Force-kill after 3s if SIGTERM is ignored
       setTimeout(() => { try { proc.kill('SIGKILL') } catch {} }, 3000)
     }, BASH_TIMEOUT_MS)
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number | null) => {
       clearTimeout(timer)
       const tail = killed
         ? `\n[killed: exceeded ${BASH_TIMEOUT_MS / 1000}s timeout]`
@@ -275,7 +275,6 @@ function executeBash(command) {
         }
       }
 
-      // Cap what the AI receives — keep start + end so headers and recent output are both preserved
       if (full.length > MAX_BASH_OUTPUT) {
         const half = MAX_BASH_OUTPUT / 2
         resolve(
@@ -288,6 +287,23 @@ function executeBash(command) {
       }
     })
 
-    proc.on('error', (err) => { clearTimeout(timer); resolve(`Error: ${err.message}`) })
+    proc.on('error', (err: Error) => { clearTimeout(timer); resolve(`Error: ${err.message}`) })
   })
+}
+
+// ── retry helpers ─────────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isRetryable(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  // HTTP status codes from AI SDK errors
+  const status = (err as unknown as Record<string, unknown>)['status'] as number | undefined
+  if (status === 429 || status === 529 || status === 500 || status === 503) return true
+  // Network-level errors
+  const code = (err as NodeJS.ErrnoException).code
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND') return true
+  return false
 }

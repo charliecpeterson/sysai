@@ -1,34 +1,31 @@
 /**
- * run.js — shared approval + agent-with-UI helpers
+ * approval.ts — shared approval + agent-with-UI helpers
  *
  * makeApproval(rl, opts) → async onToolApproval function
  * runAgentWithUI(opts)   → { text, messages }
  */
 
-import { runAgent, parseToolArgs } from './agent.js'
+import type { Interface as RLInterface } from 'readline'
+import { runAgent, parseToolArgs } from '../core/agent.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
-import { RESET, BOLD, DIM, RED, GREEN, YELLOW } from './colors.js'
+import { RESET, DIM, RED, GREEN, YELLOW } from './colors.js'
+import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
 
 // Paths that require explicit user confirmation even in auto-approve mode.
 const SENSITIVE_PATH_RE = /\.ssh\/|\.gnupg\/|\.bashrc|\.zshrc|\.bash_profile|\.zprofile|\.profile|\.bash_logout|authorized_keys|known_hosts|id_rsa|id_ed25519|\/etc\/|sudoers/i
 
 /**
  * Build an onToolApproval function.
- *
- * @param {import('readline').Interface} rl
- * @param {object} opts
- * @param {boolean} [opts.autoApprove=false]       — auto-approve bash + write_file
- * @param {Function} [opts.writeFn]                — where approval UI output goes (default: process.stderr.write)
- * @param {boolean} [opts.autoApproveWrite=false]  — always auto-approve write_file (used by taskDesigner)
  */
-export function makeApproval(rl, {
+export function makeApproval(rl: RLInterface, {
   autoApprove      = false,
-  writeFn          = (s) => process.stderr.write(s),
+  writeFn          = (s: string) => process.stderr.write(s),
   autoApproveWrite = false,
-} = {}) {
-  return async function onToolApproval(toolUse) {
-    const name = toolUse.toolName
-    const args = parseToolArgs(toolUse.input ?? toolUse.args)
+}: ApprovalOptions = {}): (toolUse: unknown) => Promise<ToolDecision> {
+  return async function onToolApproval(toolUse: unknown): Promise<ToolDecision> {
+    const tu = toolUse as { toolName: string; input?: unknown; args?: unknown }
+    const name = tu.toolName
+    const args = parseToolArgs(tu.input ?? tu.args)
 
     if (name === 'read_file') {
       writeFn(`${DIM}  ○ read  ${args.path ?? '?'}${RESET}\n`)
@@ -55,9 +52,9 @@ export function makeApproval(rl, {
     }
 
     if (name === 'write_file') {
-      const isSensitive = SENSITIVE_PATH_RE.test(args.path ?? '')
+      const isSensitive = SENSITIVE_PATH_RE.test((args.path as string) ?? '')
       writeFn(`\n${RED}  ● write${RESET}  ${args.path}${isSensitive ? `  ${YELLOW}(sensitive path)${RESET}` : ''}\n`)
-      renderWriteDiff(args.path, args.content ?? '', (line) => writeFn(line + '\n'))
+      renderWriteDiff(args.path as string, (args.content as string) ?? '', (line) => writeFn(line + '\n'))
       if ((autoApprove || autoApproveWrite) && !isSensitive) {
         writeFn(`${DIM}  (auto-approved)${RESET}\n`)
         return 'approved'
@@ -80,16 +77,6 @@ export function makeApproval(rl, {
 /**
  * Run the agent with spinner + stream renderer wired to the given streams.
  * Always flushes renderer and stops spinner (in finally). Re-throws errors.
- *
- * @param {object} opts
- * @param {string}  opts.systemPrompt
- * @param {Array}   opts.messages
- * @param {boolean} [opts.autoApprove=false]
- * @param {AbortSignal} [opts.abortSignal]
- * @param {import('readline').Interface} opts.rl
- * @param {NodeJS.WriteStream} [opts.contentStream=process.stdout]  — AI text output
- * @param {NodeJS.WriteStream} [opts.uiStream=process.stderr]       — spinner / approval prompts
- * @returns {Promise<{ text: string, messages: Array }>}
  */
 export async function runAgentWithUI({
   systemPrompt,
@@ -99,14 +86,14 @@ export async function runAgentWithUI({
   rl,
   contentStream = process.stdout,
   uiStream      = process.stderr,
-}) {
+}: RunAgentWithUIOptions): Promise<AgentResult> {
   const contentIsTTY = contentStream.isTTY
   const uiIsTTY      = uiStream.isTTY
 
   const spinner  = uiIsTTY      ? createSpinner((s) => uiStream.write(s)) : null
   const renderer = contentIsTTY ? new StreamRenderer((s) => contentStream.write(s)) : null
 
-  const writeFn       = (s) => uiStream.write(s)
+  const writeFn        = (s: string) => uiStream.write(s)
   const onToolApproval = makeApproval(rl, { autoApprove, writeFn })
 
   try {
@@ -116,7 +103,7 @@ export async function runAgentWithUI({
       onThinking:     () => spinner?.start(),
       onThinkingDone: () => spinner?.stop(),
       onToken:        contentIsTTY
-        ? (token) => renderer.write(token)
+        ? (token) => renderer!.write(token)
         : (token) => contentStream.write(token),
       onToolApproval,
       onToolResult:   (_call, _result, elapsedMs) => {

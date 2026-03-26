@@ -1,14 +1,14 @@
 import { execSync, spawnSync } from 'child_process'
 import { readFileSync, existsSync } from 'fs'
-import { homedir } from 'os'
+import type { Context, SSHInfo, SlurmInfo, ContainerInfo } from '../types.js'
 
 const MAX_BUFFER_LINES = 60
 const MAX_STDIN_CHARS  = 8000
 
 // Cache static environment facts — hostname, OS, user, etc. don't change between chat turns.
-let _static = null
+let _static: Omit<Context, 'cwd' | 'terminal_buffer' | 'stdin_pipe'> | null = null
 
-function getStaticContext() {
+function getStaticContext(): Omit<Context, 'cwd' | 'terminal_buffer' | 'stdin_pipe'> {
   if (_static) return _static
   _static = {
     hostname:  safeExec('hostname -f') || safeExec('hostname') || 'unknown',
@@ -28,13 +28,8 @@ function getStaticContext() {
  * Build the full context object for the current environment.
  * Static fields (hostname, OS, user, etc.) are cached after the first call.
  * Dynamic fields (cwd, terminal buffer, piped stdin) are refreshed every call.
- *
- * @param {object} opts
- * @param {string} [opts.stdinContent]   - piped stdin content, if any
- * @param {string} [opts.questionHint]   - the user's question (used to trim buffer intelligently)
- * @returns {object} context
  */
-export async function buildContext({ stdinContent = '', questionHint = '' } = {}) {
+export async function buildContext({ stdinContent = '', questionHint: _questionHint = '' } = {}): Promise<Context> {
   return {
     ...getStaticContext(),
     cwd:             process.cwd(),
@@ -46,8 +41,8 @@ export async function buildContext({ stdinContent = '', questionHint = '' } = {}
 /**
  * Format context into a human-readable block for the prompt.
  */
-export function formatContext(ctx) {
-  const lines = []
+export function formatContext(ctx: Context): string {
+  const lines: string[] = []
 
   lines.push(`hostname: ${ctx.hostname}`)
   lines.push(`user: ${ctx.user}`)
@@ -76,7 +71,7 @@ export function formatContext(ctx) {
 
 // --- helpers ---
 
-function safeExec(cmd) {
+function safeExec(cmd: string): string | null {
   try {
     return execSync(cmd, { encoding: 'utf8', timeout: 2000 }).trim()
   } catch {
@@ -84,14 +79,14 @@ function safeExec(cmd) {
   }
 }
 
-function getOS() {
+function getOS(): string {
   const p = process.platform
   if (p === 'darwin') return 'macOS'
   if (p === 'linux')  return 'Linux'
   return p
 }
 
-function getDistro() {
+function getDistro(): string | null {
   if (process.platform !== 'linux') return null
   try {
     const release = readFileSync('/etc/os-release', 'utf8')
@@ -102,30 +97,27 @@ function getDistro() {
   }
 }
 
-function getSSHInfo() {
+function getSSHInfo(): SSHInfo {
   const conn = process.env.SSH_CONNECTION
   if (!conn) return { active: false }
-  return {
-    active: true,
-    client: conn,
-  }
+  return { active: true, client: conn }
 }
 
-function getSlurmInfo() {
+function getSlurmInfo(): SlurmInfo {
   const job_id = process.env.SLURM_JOB_ID
   if (!job_id) return { active: false }
   return {
     active:    true,
     job_id,
-    job_name:  process.env.SLURM_JOB_NAME    || null,
-    nodelist:  process.env.SLURM_NODELIST    || null,
+    job_name:  process.env.SLURM_JOB_NAME      || null,
+    nodelist:  process.env.SLURM_NODELIST      || null,
     partition: process.env.SLURM_JOB_PARTITION || null,
-    ntasks:    process.env.SLURM_NTASKS      || null,
-    cpus:      process.env.SLURM_CPUS_ON_NODE || null,
+    ntasks:    process.env.SLURM_NTASKS        || null,
+    cpus:      process.env.SLURM_CPUS_ON_NODE  || null,
   }
 }
 
-function getContainerInfo() {
+function getContainerInfo(): ContainerInfo {
   if (existsSync('/.dockerenv'))           return { active: true, type: 'docker' }
   if (process.env.SINGULARITY_CONTAINER)   return { active: true, type: 'singularity', image: process.env.SINGULARITY_CONTAINER }
   if (process.env.APPTAINER_CONTAINER)     return { active: true, type: 'apptainer',   image: process.env.APPTAINER_CONTAINER }
@@ -136,17 +128,16 @@ function getContainerInfo() {
   return { active: false }
 }
 
-function getSudoInfo() {
+function getSudoInfo(): string | null {
   return process.env.SUDO_USER || null
 }
 
-function getTerminalBuffer() {
+function getTerminalBuffer(): string | null {
   if (!process.env.TMUX) return null
 
   // In split mode, capture the work pane not the chat pane
-  let workPane = process.env.SYSAI_WORK_PANE
+  let workPane: string | null | undefined = process.env.SYSAI_WORK_PANE
   if (!workPane) {
-    // Auto-detect: if there are multiple panes, grab the one that isn't us
     const currentPane = spawnSync('tmux', ['display-message', '-p', '#{pane_id}'],
       { encoding: 'utf8', timeout: 1000 }).stdout.trim()
     const allPanes = spawnSync('tmux', ['list-panes', '-F', '#{pane_id}'],
@@ -157,26 +148,22 @@ function getTerminalBuffer() {
     ? ['capture-pane', '-p', '-S', `-${MAX_BUFFER_LINES}`, '-t', workPane]
     : ['capture-pane', '-p', '-S', `-${MAX_BUFFER_LINES}`]
 
-  const result = spawnSync('tmux', args, {
-    encoding: 'utf8',
-    timeout: 2000,
-  })
+  const result = spawnSync('tmux', args, { encoding: 'utf8', timeout: 2000 })
 
   if (result.status !== 0 || !result.stdout.trim()) return null
 
   // Strip the last line if it's just the prompt (starts with $ or %)
   const lines = result.stdout.split('\n')
   const filtered = lines.filter((l, i) => {
-    if (i === lines.length - 1 && /^[\$%#>]\s*$/.test(l.trim())) return false
+    if (i === lines.length - 1 && /^[$%#>]\s*$/.test(l.trim())) return false
     return true
   })
 
   return filtered.join('\n').trim() || null
 }
 
-function truncate(str, maxChars) {
+function truncate(str: string, maxChars: number): string {
   if (str.length <= maxChars) return str
   const half = Math.floor(maxChars / 2)
   return str.slice(0, half) + '\n\n[... truncated ...]\n\n' + str.slice(-half)
 }
-

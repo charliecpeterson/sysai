@@ -7,18 +7,22 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node main.js chat --inline",
-    "install": "node main.js install",
+    "start": "bun run main.ts chat --inline",
+    "install": "bun run main.ts install",
     "build": "bash build.sh",
-    "build:local": "bun build --compile --minify main.js --outfile dist/sysai-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+    "build:local": "bun build --compile --minify main.ts --outfile dist/sysai-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
   },
   "bin": {
-    "sysai": "./main.js"
+    "sysai": "./main.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.63",
     "@ai-sdk/openai": "^3.0.47",
     "ai": "^6.0.134",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
   }
 }

@@ -7,7 +7,7 @@ Works everywhere your shell does.
 ## Quick start
 
 ```bash
-git clone https://github.com/charliecpeterson/sysai && cd sysai && node main.js install
+git clone https://github.com/charliecpeterson/sysai && cd sysai && bun run main.ts install
 ```
 
 Then reload your shell:
@@ -98,7 +98,7 @@ sysai mycheck      # any task you've created
 sysai mycheck --dry-run   # preview what gets collected before AI runs
 ```
 
-Two built-in tasks are installed automatically. See [Tasks](#tasks) below for how to create your own.
+Two built-in tasks are installed automatically on first `sysai install`. See [Tasks](#tasks) below for how to create your own.
 
 ## Tasks
 
@@ -127,7 +127,7 @@ Opens a back-and-forth chat with the AI. It asks what you want, explores your sy
 
 #### Manually
 
-Task files use YAML frontmatter + a prompt body:
+Task files use a simple frontmatter + prompt body format:
 
 ```markdown
 ---
@@ -173,7 +173,7 @@ sysai model gpt-5.4   # switch directly by name
 
 Example setup with multiple models:
 ```
-  claude-sonnet   anthropic   claude-sonnet-4-6   ← active
+  claude-sonnet   anthropic   claude-sonnet-4-6   ● active
   gpt-5.4         openai      gpt-5.4
   local-llama     llamacpp    llama3.2
 ```
@@ -204,15 +204,19 @@ sysai status
 ```
   sysai v0.1.0
 
-  source:  /Users/charlie/projects/sysai
+  source:  /Users/charlie/projects/sysai/src/commands
 
   checking models…
 
-  ● claude-sonnet   anthropic   claude-sonnet-4-6   ← active
-  ● gpt-5.4         openai      gpt-5.4
-  ✗ local-llama     llamacpp    llama3.2             connection refused
+  ●  claude-sonnet   anthropic   claude-sonnet-4-6   ← active
+  ●  gpt-5.4         openai      gpt-5.4
+  ●  local-llama     llamacpp    llama3.2             connection refused
 
-  max turns:  20 (default)
+  env vars:
+    SYSAI_MAX_TURNS       20 (default)  — max agent iterations per query
+    SYSAI_MAX_TOKENS      8192 (default)  — max tokens per response
+    SYSAI_BASH_TIMEOUT    120 (default)  — seconds before killing a bash command
+    SYSAI_COMPACT_KEEP    6 (default)  — turns to keep when compacting
 
   sysai model <name>   switch active model
   sysai setup          add / remove models
@@ -241,7 +245,7 @@ sysai setup
 # Name: local-llama
 ```
 
-For small local models, add `SYSAI_MAX_TURNS=8` to `~/.sysai/models.json`'s active config or set it in your environment to avoid hitting small context windows.
+For small local models, set `SYSAI_MAX_TURNS=8` in your environment to avoid hitting small context windows.
 
 ### Custom instructions
 
@@ -344,7 +348,7 @@ Bash output over 20k chars is truncated with start + end preserved and a note to
 
 ```
 ~/.sysai/
-├── bin/sysai          ← compiled binary or symlink to main.js
+├── bin/sysai          ← compiled binary (or symlink to main.ts when running from source)
 ├── models.json        ← named model configurations (chmod 600)
 ├── shell.bash         ← shell integration (? function)
 ├── instructions.md    ← optional: custom instructions for the AI
@@ -387,7 +391,7 @@ rm -rf ~/.sysai
 
 ## Building from source
 
-Requires [bun](https://bun.sh) for compiled binaries, or Node.js 18+ to run directly.
+Requires [bun](https://bun.sh).
 
 ```bash
 npm install
@@ -395,32 +399,53 @@ npm run build          # cross-compile all 4 targets
 npm run build:local    # compile for current platform only
 ```
 
-Outputs self-contained binaries to `dist/sysai-{darwin,linux}-{x64,arm64}`. The installer uses the prebuilt binary if available, otherwise symlinks `main.js` directly.
+Outputs self-contained binaries to `dist/sysai-{darwin,linux}-{x64,arm64}`. The installer copies the prebuilt binary if one is present, otherwise symlinks `main.ts` and uses bun at runtime.
+
+To run directly from source without building:
+
+```bash
+bun run main.ts --version
+bun run main.ts install
+```
 
 ## Project structure
 
 ```
 sysai/
-├── main.js      ← entry point: install/setup/status/tasks/model commands
-├── cli.js       ← one-shot ? query (agentic)
-├── server.js    ← interactive chat with session management and tmux split
-├── agent.js     ← agentic loop: streamText → tool calls → approval → execute
-├── provider.js  ← model instance creation from named config or legacy env
-├── models.js    ← named model config list (~/.sysai/models.json)
-├── task.js      ← task file parsing and listing
-├── tasks/       ← built-in tasks (doctor.md, jobcheck.md)
-├── context.js   ← environment context detection (OS, SLURM, tmux, SSH, etc.)
-├── prompt.js    ← system prompt + instructions.md loader
-├── history.js   ← session-based conversation history
-├── config.js    ← legacy flat config loader (backward compat)
-├── render.js    ← spinner, streaming markdown renderer, write diff
-├── shell.bash   ← shell integration (? function)
-└── build.sh     ← cross-compile via bun
+├── main.ts                    ← entry point and CLI router
+├── src/
+│   ├── types.ts               ← shared TypeScript interfaces
+│   ├── version.ts             ← version constant
+│   ├── commands/
+│   │   ├── ask.ts             ← one-shot ? query (agentic)
+│   │   ├── chat.ts            ← interactive chat with session management and tmux split
+│   │   └── setup.ts           ← model setup wizard, status, list, switch
+│   ├── core/
+│   │   ├── agent.ts           ← agentic loop: streamText → tool calls → approval → execute
+│   │   ├── prompt.ts          ← system prompt + instructions.md loader
+│   │   └── provider.ts        ← AI SDK model instantiation (Anthropic, OpenAI, llama.cpp)
+│   ├── storage/
+│   │   ├── history.ts         ← JSONL session files, auto-managed
+│   │   └── models.ts          ← named model configs (~/.sysai/models.json)
+│   ├── env/
+│   │   └── context.ts         ← environment detection (OS, SLURM, tmux, SSH, container)
+│   ├── task/
+│   │   └── task.ts            ← task file parsing, listing, and execution
+│   └── ui/
+│       ├── approval.ts        ← tool approval prompts and agent UI wiring
+│       ├── colors.ts          ← ANSI color constants
+│       ├── errors.ts          ← API error formatting
+│       └── render.ts          ← spinner, streaming markdown renderer, write diff
+├── tasks/                     ← built-in tasks (doctor.md, jobcheck.md)
+├── shell.bash                 ← shell integration (? function)
+├── build.sh                   ← cross-compile via bun
+└── tsconfig.json
 ```
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 20+ (only needed when running from source without bun)
+- bun (for building binaries or running from source)
 - bash or zsh
 - tmux (optional — enables split-pane chat and terminal buffer context)
 - An API key for Anthropic or OpenAI, or a local model endpoint

@@ -1,30 +1,32 @@
 /**
- * setup.js — model management and configuration commands
+ * setup.ts — model management and configuration commands
  *
  * Exports: setup, status, listModels, switchModel, editInstructions
- * (all lazily imported by main.js via dynamic import)
+ * (all lazily imported by main.ts via dynamic import)
  */
 
-import { VERSION } from './version.js'
+import { VERSION } from '../version.js'
 import { createInterface } from 'readline'
+import type { Interface as RLInterface } from 'readline'
 import { mkdirSync, existsSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
-import { formatApiError } from './errors.js'
-import { DEFAULTS } from './provider.js'
-import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
+import { formatApiError } from '../ui/errors.js'
+import { DEFAULTS } from '../core/provider.js'
+import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
+import type { ModelConfig, Provider } from '../types.js'
 
-export async function setup() {
-  const { loadModels, saveModels, addModel, removeModel, switchActive } = await import('./models.js')
+export async function setup(): Promise<void> {
+  const { loadModels, saveModels, addModel, removeModel, switchActive } = await import('../storage/models.js')
   const { generateText } = await import('ai')
-  const { getModelInstance } = await import('./provider.js')
+  const { getModelInstance } = await import('../core/provider.js')
 
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const ask = (q) => new Promise(resolve => rl.question(q, resolve))
+  const ask = (q: string) => new Promise<string>(resolve => rl.question(q, resolve))
 
   process.stdout.write(`\n  ${CYAN}sysai setup${RESET} — manage model configurations\n\n`)
 
@@ -68,8 +70,8 @@ export async function setup() {
       try {
         const mdl = getModelInstance(cfg)
         await Promise.race([
-          generateText({ model: mdl, prompt: 'Reply with exactly: ok', maxTokens: 10 }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout after 30s')), 30_000)),
+          generateText({ model: mdl, prompt: 'Reply with exactly: ok', maxOutputTokens: 10 }),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout after 30s')), 30_000)),
         ])
         process.stdout.write(`\r${GREEN}  ✓ Connection works!${RESET}                    \n\n`)
       } catch (err) {
@@ -106,7 +108,7 @@ export async function setup() {
         switchActive(name)
         process.stdout.write(`${GREEN}  ✓ Active model set to "${name}"${RESET}\n\n`)
       } catch (err) {
-        process.stdout.write(`${RED}  ${err.message}${RESET}\n\n`)
+        process.stdout.write(`${RED}  ${(err as Error).message}${RESET}\n\n`)
       }
       continue
     }
@@ -117,22 +119,25 @@ export async function setup() {
   rl.close()
 }
 
-async function addModelWizard(ask, rl) {
-
+async function addModelWizard(
+  ask: (q: string) => Promise<string>,
+  _rl: RLInterface
+): Promise<ModelConfig | null> {
   process.stdout.write(`  Which provider?\n\n`)
   process.stdout.write(`    1) Anthropic  ${DIM}(Claude)${RESET}\n`)
   process.stdout.write(`    2) OpenAI     ${DIM}(GPT-4o, gpt-5.4, o3, etc.)${RESET}\n`)
   process.stdout.write(`    3) Local      ${DIM}(llama.cpp, Ollama, any OpenAI-compatible endpoint)${RESET}\n\n`)
 
   const choice = (await ask('  Choose [1/2/3]: ')).trim()
-  let provider, defaultModel
+  let provider: Provider
+  let defaultModel: string
 
   if      (choice === '1') { provider = 'anthropic'; defaultModel = DEFAULTS.anthropic }
   else if (choice === '2') { provider = 'openai';    defaultModel = DEFAULTS.openai    }
   else if (choice === '3') { provider = 'llamacpp';  defaultModel = DEFAULTS.llamacpp  }
   else { process.stdout.write(`${RED}  Invalid choice.${RESET}\n`); return null }
 
-  const cfg = { provider }
+  const cfg: Partial<ModelConfig> & { provider: Provider } = { provider }
 
   // Provider-specific fields
   if (provider === 'anthropic' || provider === 'openai') {
@@ -155,12 +160,12 @@ async function addModelWizard(ask, rl) {
   const name = (await ask(`  Config name ${DIM}(Enter for "${suggestedName}")${RESET}: `)).trim() || suggestedName
   cfg.name = name
 
-  return cfg
+  return cfg as ModelConfig
 }
 
-export async function status() {
-  const { loadModels } = await import('./models.js')
-  const { getModelInstance } = await import('./provider.js')
+export async function status(): Promise<void> {
+  const { loadModels } = await import('../storage/models.js')
+  const { getModelInstance } = await import('../core/provider.js')
   const { generateText }     = await import('ai')
 
   const srcDir = dirname(fileURLToPath(import.meta.url))
@@ -179,12 +184,12 @@ export async function status() {
   // Ping all models in parallel with 8s timeout
   process.stdout.write(`  ${DIM}checking models…${RESET}\n\n`)
 
-  const ping = async (cfg) => {
+  const ping = async (cfg: ModelConfig): Promise<{ ok: boolean; err?: string }> => {
     try {
       const mdl = getModelInstance(cfg)
       await Promise.race([
-        generateText({ model: mdl, prompt: 'Reply: ok', maxTokens: 4 }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
+        generateText({ model: mdl, prompt: 'Reply: ok', maxOutputTokens: 4 }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
       ])
       return { ok: true }
     } catch (err) {
@@ -200,7 +205,7 @@ export async function status() {
   for (let i = 0; i < models.length; i++) {
     const m = models[i]
     const r = results[i]
-    const isActive = m.name === data.active
+    const isActive = m.name === data?.active
     const dot = r.ok ? `${GREEN}●${RESET}` : `${RED}●${RESET}`
     const modelId = m.model || `${DIM}${DEFAULTS[m.provider] ?? '?'}${RESET}`
     const activeMark = isActive ? `  ${GREEN}${BOLD}← active${RESET}` : ''
@@ -211,7 +216,7 @@ export async function status() {
 
   process.stdout.write('\n')
 
-  const ev = (name, def) => {
+  const ev = (name: string, def: string) => {
     const val = process.env[name]
     return val ? `${val} ${DIM}(from env)${RESET}` : `${DIM}${def} (default)${RESET}`
   }
@@ -224,8 +229,8 @@ export async function status() {
   process.stdout.write(`  ${DIM}sysai setup${RESET}           add / remove models\n\n`)
 }
 
-export async function listModels() {
-  const { loadModels } = await import('./models.js')
+export async function listModels(): Promise<void> {
+  const { loadModels } = await import('../storage/models.js')
 
   const data = loadModels()
   if (!data?.models?.length) {
@@ -255,8 +260,8 @@ export async function listModels() {
   process.stdout.write('\n')
 }
 
-export async function switchModel(name) {
-  const { loadModels, switchActive } = await import('./models.js')
+export async function switchModel(name?: string): Promise<void> {
+  const { loadModels, switchActive } = await import('../storage/models.js')
 
   const data = loadModels()
   if (!data?.models?.length) {
@@ -264,7 +269,8 @@ export async function switchModel(name) {
     process.exit(1)
   }
 
-  if (!name) {
+  let resolvedName = name
+  if (!resolvedName) {
     // Interactive picker
     process.stdout.write('\n')
     const models = data.models
@@ -276,24 +282,24 @@ export async function switchModel(name) {
     }
     process.stdout.write('\n')
     const rl = createInterface({ input: process.stdin, output: process.stdout })
-    const answer = await new Promise(resolve => rl.question('  Switch to (name or number): ', resolve))
+    const answer = await new Promise<string>(resolve => rl.question('  Switch to (name or number): ', resolve))
     rl.close()
     const num = parseInt(answer.trim())
-    name = (!isNaN(num) && num >= 1 && num <= models.length)
+    resolvedName = (!isNaN(num) && num >= 1 && num <= models.length)
       ? models[num - 1].name
       : answer.trim()
   }
 
   try {
-    switchActive(name)
-    process.stdout.write(`${GREEN}  ✓ Active model: ${BOLD}${name}${RESET}\n\n`)
+    switchActive(resolvedName)
+    process.stdout.write(`${GREEN}  ✓ Active model: ${BOLD}${resolvedName}${RESET}\n\n`)
   } catch (err) {
-    process.stderr.write(`${RED}sysai: ${err.message}${RESET}\n`)
+    process.stderr.write(`${RED}sysai: ${(err as Error).message}${RESET}\n`)
     process.exit(1)
   }
 }
 
-export async function editInstructions() {
+export async function editInstructions(): Promise<void> {
   const path = `${homedir()}/.sysai/instructions.md`
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
 
