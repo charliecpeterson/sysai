@@ -204,10 +204,41 @@ MCP tool calls show the server name, tool name, and arguments. `-y` auto-approve
 ### Managing MCP servers
 
 ```bash
-sysai mcp list            # show all configured servers
-sysai mcp add             # add a server (interactive wizard)
-sysai mcp remove <name>   # remove a server
+sysai mcp list             # show all configured servers
+sysai mcp add              # add a server (interactive wizard)
+sysai mcp edit <name>      # update config in place (API key, args, etc.)
+sysai mcp remove <name>    # remove a server
+sysai mcp test [name]      # connect and list tools — all servers if no name given
 ```
+
+`sysai mcp test` is useful when setting up a new server — it connects, lists every tool and its description, and shows a clear error if the server fails to start:
+
+```
+$ sysai mcp test get_weather
+
+  connecting…
+
+  ●  get_weather  2 tools
+       weather-get_hourly  Get hourly weather forecast for a location
+       weather-get_daily   Get daily weather forecast for a location
+```
+
+`sysai mcp edit` lets you update a server without removing and re-adding it. Current values are shown as defaults — just press Enter to keep them:
+
+```
+$ sysai mcp edit get_weather
+
+  Edit MCP server "get_weather"  (Enter to keep current value)
+
+  Command [npx]:
+  Args [-y @timlukahorstmann/mcp-weather]:
+  Env vars [ACCUWEATHER_API_KEY=zpka_...]:  ACCUWEATHER_API_KEY=new_key_here
+  Description [none]:
+
+  ✓ Updated MCP server "get_weather"
+```
+
+> **Note on env var values:** do not quote values in the wizard — type `KEY=value`, not `KEY="value"`. Quotes are stripped automatically if present.
 
 ### Example: knowledge base via MCP
 
@@ -296,6 +327,8 @@ sysai status
   ●  gpt-4o          openai      gpt-4o
   ●  local-llama     llamacpp    llama3.2
 
+  ◆  get_weather  2 tools
+
   env vars:
     SYSAI_MAX_TURNS       20 (default)  — max agent iterations per query
     SYSAI_MAX_TOKENS      8192 (default)  — max tokens per response
@@ -306,7 +339,7 @@ sysai status
   sysai setup          add / remove models
 ```
 
-`●` green = healthy, `●` red = failed (error shown inline).
+`●` green = healthy, `●` red = failed (error shown inline). MCP servers appear below models as `◆` — green if connected, red if the server failed to start.
 
 ### Providers
 
@@ -405,7 +438,7 @@ sysai doctor  (task)
 | `bash` | ask user | Run any shell command. Output capped at 20k chars (start + end preserved). |
 | `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading of large files. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
-| `mcp__*__*` | ask user | Any tool exposed by a configured MCP server. Auto-approved with `-y`. |
+| MCP tools | ask user | Any tool exposed by a configured MCP server, called by its original name. Auto-approved with `-y`. Result preview shown inline. |
 
 ### Context
 
@@ -463,7 +496,9 @@ sysai status               — show models with live health check
 
 sysai mcp list             — list configured MCP servers
 sysai mcp add              — add an MCP server (interactive wizard)
+sysai mcp edit <name>      — update a server's config in place
 sysai mcp remove <name>    — remove an MCP server
+sysai mcp test [name]      — connect and list tools (all servers if no name)
 
 sysai tasks                — list saved tasks
 sysai task new             — create a task with AI assistance
