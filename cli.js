@@ -19,8 +19,10 @@ import { BOLD, DIM, CYAN, RESET, RED } from './colors.js'
 async function main() {
   const args        = process.argv.slice(2)
   const autoApprove = args.includes('-y') || args.includes('--yes')
-  const cleanArgs   = args.filter(a => a !== '-y' && a !== '--yes')
-  const question    = parseFlag(cleanArgs, '--question') ?? cleanArgs.join(' ')
+  // Strip flags before joining remaining args as the question
+  const questionFlag = parseFlag(args, '--question')
+  const cleanArgs    = stripFlag(args.filter(a => a !== '-y' && a !== '--yes'), '--question')
+  const question     = questionFlag ?? cleanArgs.join(' ')
 
   if (!question.trim()) {
     console.error('Usage: ? [-y] <question>')
@@ -82,6 +84,13 @@ function parseFlag(args, flag) {
   const idx = args.indexOf(flag)
   if (idx === -1 || idx + 1 >= args.length) return null
   return args[idx + 1]
+}
+
+// Remove a --flag and its value from an args array
+function stripFlag(args, flag) {
+  const idx = args.indexOf(flag)
+  if (idx === -1) return args
+  return [...args.slice(0, idx), ...args.slice(idx + 2)]
 }
 
 main().catch(err => {

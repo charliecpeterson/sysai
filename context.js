@@ -5,9 +5,29 @@ import { homedir } from 'os'
 const MAX_BUFFER_LINES = 60
 const MAX_STDIN_CHARS  = 8000
 
+// Cache static environment facts — hostname, OS, user, etc. don't change between chat turns.
+let _static = null
+
+function getStaticContext() {
+  if (_static) return _static
+  _static = {
+    hostname:  safeExec('hostname -f') || safeExec('hostname') || 'unknown',
+    user:      process.env.USER || process.env.LOGNAME || safeExec('whoami') || 'unknown',
+    shell:     process.env.SHELL?.split('/').pop() || 'sh',
+    os:        getOS(),
+    distro:    getDistro(),
+    ssh:       getSSHInfo(),
+    slurm:     getSlurmInfo(),
+    container: getContainerInfo(),
+    sudo:      getSudoInfo(),
+  }
+  return _static
+}
+
 /**
  * Build the full context object for the current environment.
- * All fields degrade gracefully — nothing throws if a command is missing.
+ * Static fields (hostname, OS, user, etc.) are cached after the first call.
+ * Dynamic fields (cwd, terminal buffer, piped stdin) are refreshed every call.
  *
  * @param {object} opts
  * @param {string} [opts.stdinContent]   - piped stdin content, if any
@@ -15,21 +35,12 @@ const MAX_STDIN_CHARS  = 8000
  * @returns {object} context
  */
 export async function buildContext({ stdinContent = '', questionHint = '' } = {}) {
-  const ctx = {
-    hostname:        safeExec('hostname -f') || safeExec('hostname') || 'unknown',
-    user:            process.env.USER || process.env.LOGNAME || safeExec('whoami') || 'unknown',
+  return {
+    ...getStaticContext(),
     cwd:             process.cwd(),
-    shell:           process.env.SHELL?.split('/').pop() || 'sh',
-    os:              getOS(),
-    distro:          getDistro(),
-    ssh:             getSSHInfo(),
-    slurm:           getSlurmInfo(),
-    container:       getContainerInfo(),
-    sudo:            getSudoInfo(),
     terminal_buffer: getTerminalBuffer(),
     stdin_pipe:      stdinContent ? truncate(stdinContent, MAX_STDIN_CHARS) : null,
   }
-  return ctx
 }
 
 /**

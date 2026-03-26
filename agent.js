@@ -12,8 +12,9 @@ import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
 import { DIM, YELLOW, RESET } from './colors.js'
 
-const MAX_ITERATIONS = parseInt(process.env.SYSAI_MAX_TURNS || '20')
-const MAX_FILE_READ  = 20_000  // chars
+const MAX_ITERATIONS   = parseInt(process.env.SYSAI_MAX_TURNS || '20')
+const MAX_FILE_READ    = 20_000  // chars
+const BASH_TIMEOUT_MS  = parseInt(process.env.SYSAI_BASH_TIMEOUT || '120') * 1000
 
 const TOOLS = {
   bash: tool({
@@ -69,9 +70,10 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
 
     const result = streamText({
       model,
-      system:   systemPrompt,
-      messages: history,
-      tools:    TOOLS,
+      system:    systemPrompt,
+      messages:  history,
+      tools:     TOOLS,
+      maxTokens: parseInt(process.env.SYSAI_MAX_TOKENS || '8192'),
       ...(abortSignal && { abortSignal }),
     })
 
@@ -166,12 +168,15 @@ export async function runAgent({ systemPrompt, messages, onToken, onToolApproval
 
 // ── tool execution ────────────────────────────────────────────────────────────
 
+export function parseToolArgs(raw) {
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) } catch { return {} }
+  }
+  return raw ?? {}
+}
+
 async function executeTool(call) {
-  // Vercel AI SDK uses `input` for tool call arguments
-  const raw = call.input ?? call.args
-  const args = typeof raw === 'string'
-    ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
-    : (raw ?? {})
+  const args = parseToolArgs(call.input ?? call.args)
 
   switch (call.toolName) {
     case 'bash':
@@ -241,11 +246,23 @@ function executeBash(command) {
     })
 
     let output = ''
+    let killed = false
     proc.stdout.on('data', (data) => { output += data.toString() })
     proc.stderr.on('data', (data) => { output += data.toString() })
 
+    // Kill hung commands after BASH_TIMEOUT_MS (default 120s, set SYSAI_BASH_TIMEOUT to override)
+    const timer = setTimeout(() => {
+      killed = true
+      proc.kill('SIGTERM')
+      // Force-kill after 3s if SIGTERM is ignored
+      setTimeout(() => { try { proc.kill('SIGKILL') } catch {} }, 3000)
+    }, BASH_TIMEOUT_MS)
+
     proc.on('close', (code) => {
-      const tail = code !== 0 ? `\n[exit ${code}]` : ''
+      clearTimeout(timer)
+      const tail = killed
+        ? `\n[killed: exceeded ${BASH_TIMEOUT_MS / 1000}s timeout]`
+        : (code !== 0 ? `\n[exit ${code}]` : '')
       const full = (output + tail).trim() || '(no output)'
 
       if (process.stdout.isTTY) {
@@ -271,6 +288,6 @@ function executeBash(command) {
       }
     })
 
-    proc.on('error', (err) => resolve(`Error: ${err.message}`))
+    proc.on('error', (err) => { clearTimeout(timer); resolve(`Error: ${err.message}`) })
   })
 }

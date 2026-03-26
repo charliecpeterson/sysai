@@ -8,11 +8,7 @@ SYSAI_BIN="$HOME/.sysai/bin/sysai"
 # single-character filename in the current directory before the function
 # is ever looked up.
 _sysai_ask () {
-  if [ -t 0 ]; then
-    "$SYSAI_BIN" ask "$@"
-  else
-    cat | "$SYSAI_BIN" ask "$@"
-  fi
+  "$SYSAI_BIN" ask "$@"
 }
 alias '?'='_sysai_ask'
 

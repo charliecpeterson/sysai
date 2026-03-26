@@ -208,8 +208,7 @@ async function install() {
 
       // Install npm dependencies if needed
       const nmPath = join(srcDir, 'node_modules')
-      const { existsSync: exists } = await import('fs')
-      if (!exists(nmPath)) {
+      if (!existsSync(nmPath)) {
         process.stdout.write(`${DIM}  Installing dependencies...${RESET}`)
         execSync('npm install --silent', { cwd: srcDir })
         process.stdout.write(`\r${GREEN}  ✓${RESET} Dependencies installed          \n`)

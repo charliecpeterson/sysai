@@ -7,13 +7,23 @@
 
 import { readFileSync, existsSync, readdirSync, createReadStream, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
-import { join }    from 'path'
+import { join, resolve, sep } from 'path'
 import { spawnSync } from 'child_process'
 import { createInterface } from 'readline'
+import { parseToolArgs } from './agent.js'
 import { formatApiError } from './errors.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 export const TASKS_DIR = join(homedir(), '.sysai', 'tasks')
+
+/**
+ * Resolve a task name to its file path and verify it stays inside TASKS_DIR.
+ * Returns null if the name contains path traversal (e.g. '../../etc/passwd').
+ */
+function safeTaskPath(name) {
+  const resolved = resolve(join(TASKS_DIR, `${name}.md`))
+  return resolved.startsWith(TASKS_DIR + sep) ? resolved : null
+}
 
 /**
  * Parse a task markdown file.
@@ -49,8 +59,8 @@ export function parseTask(content, name = '') {
 }
 
 export function loadTask(name) {
-  const path = join(TASKS_DIR, `${name}.md`)
-  if (!existsSync(path)) return null
+  const path = safeTaskPath(name)
+  if (!path || !existsSync(path)) return null
   try { return parseTask(readFileSync(path, 'utf8'), name) } catch { return null }
 }
 
@@ -104,8 +114,9 @@ export async function requireTask(name) {
 }
 
 export async function taskEdit(name) {
+  const path = safeTaskPath(name)
+  if (!path) { process.stderr.write(`${RED}sysai: invalid task name "${name}"${RESET}\n`); return }
   mkdirSync(TASKS_DIR, { recursive: true })
-  const path = join(TASKS_DIR, `${name}.md`)
   if (!existsSync(path)) {
     writeFileSync(path, `---\ndescription: ${name}\nauto_run:\n  - echo "add commands here"\n---\nDescribe what the AI should do with the output above.\n`, 'utf8')
   }
@@ -113,8 +124,8 @@ export async function taskEdit(name) {
 }
 
 export async function taskRm(name) {
-  const path = join(TASKS_DIR, `${name}.md`)
-  if (!existsSync(path)) { process.stderr.write(`${RED}sysai: no task named "${name}"${RESET}\n`); return }
+  const path = safeTaskPath(name)
+  if (!path || !existsSync(path)) { process.stderr.write(`${RED}sysai: no task named "${name}"${RESET}\n`); return }
   unlinkSync(path)
   process.stdout.write(`${GREEN}  ✓ Deleted task "${name}"${RESET}\n`)
 }
@@ -128,11 +139,14 @@ export async function runTaskCmd(task, { dryRun = false } = {}) {
 
   // Run auto_run commands silently, collect output
   let autoRunOutput = ''
+  const autoRunTimeout = parseInt(process.env.SYSAI_BASH_TIMEOUT || '120') * 1000
   if (task.auto_run.length > 0) {
     for (const cmd of task.auto_run) {
-      const r = spawnSync(shell, ['-c', cmd], { encoding: 'utf8', env: process.env })
+      const r = spawnSync(shell, ['-c', cmd], { encoding: 'utf8', env: process.env, timeout: autoRunTimeout })
       const out = ((r.stdout || '') + (r.stderr || '')).trim()
-      autoRunOutput += `$ ${cmd}\n${out || '(no output)'}\n\n`
+      const timedOut = r.signal === 'SIGTERM' || r.error?.code === 'ETIMEDOUT'
+      const suffix = timedOut ? '\n[killed: exceeded timeout]' : ''
+      autoRunOutput += `$ ${cmd}\n${out || '(no output)'}${suffix}\n\n`
     }
   }
 
@@ -258,10 +272,7 @@ export async function taskDesigner() {
   // Override write_file display to show green "writing task" message
   const designerApproval = async (toolUse) => {
     const name = toolUse.toolName
-    const raw  = toolUse.input ?? toolUse.args
-    const args = typeof raw === 'string'
-      ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
-      : (raw ?? {})
+    const args = parseToolArgs(toolUse.input ?? toolUse.args)
 
     if (name === 'write_file') {
       process.stdout.write(`\n${GREEN}  ● write  ${BOLD}${args.path}${RESET}\n`)

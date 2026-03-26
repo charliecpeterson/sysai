@@ -17,10 +17,12 @@ import { makeApproval, runAgentWithUI } from './run.js'
 import {
   createSession, appendTurn, listSessions, loadSession,
   lastSession, deleteSession, migrateOldHistory, pruneHistory,
+  writeCompactedSession,
 } from './history.js'
 import { formatApiError } from './errors.js'
 import { VERSION } from './version.js'
 import { getActiveConfig } from './models.js'
+import { DEFAULTS } from './provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 async function main() {
@@ -77,7 +79,6 @@ async function main() {
   const last = lastSession()
   if (last && last.turns > 0) {
     const when = new Date(last.ts).toLocaleString()
-    const title = last.title ? `  "${last.title.slice(0, 60)}"` : ''
     process.stdout.write(`${DIM}Last session: ${when} (${last.turns} turns)${RESET}\n`)
     if (last.title) process.stdout.write(`${DIM}  ${last.title.slice(0, 80)}${RESET}\n`)
     process.stdout.write(`${DIM}Resume? (y/N) ${RESET}`)
@@ -132,8 +133,9 @@ async function main() {
 
     activeAbort = new AbortController()
     let fullResponse = ''
+    let result = null
     try {
-      const result = await runAgentWithUI({
+      result = await runAgentWithUI({
         systemPrompt:  getSystemPrompt(),
         messages,
         autoApprove:   false,
@@ -155,11 +157,14 @@ async function main() {
 
     process.stdout.write('\n\n')
 
-    sessionHistory.push({ role: 'user',      content: messages[messages.length - 1].content })
-    sessionHistory.push({ role: 'assistant',  content: fullResponse })
-
-    const maxTurns = parseInt(process.env.SYSAI_MAX_TURNS || '20')
-    if (sessionHistory.length > maxTurns * 2) sessionHistory = sessionHistory.slice(-(maxTurns * 2))
+    // Preserve full agent message history (including tool calls/results) for continuity.
+    // result.messages already contains the prior sessionHistory + new turns, so just replace.
+    if (result?.messages) {
+      sessionHistory = result.messages
+      // Cap at ~60 messages to stay within context limits (tool calls add extra messages)
+      const cap = parseInt(process.env.SYSAI_MAX_TURNS || '20') * 3
+      if (sessionHistory.length > cap) sessionHistory = sessionHistory.slice(-cap)
+    }
 
     if (fullResponse) {
       appendTurn(currentSession, { question, response: fullResponse })
@@ -197,7 +202,7 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
       break
 
     case '/clear':
-      history.length = 0
+      setSession([], getCurrentSession())
       process.stdout.write(`${DIM}Conversation cleared.${RESET}\n`)
       break
 
@@ -302,20 +307,34 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
     }
 
     case '/compact': {
-      const KEEP = 6
-      if (history.length <= KEEP * 2) {
+      const COMPACT_KEEP = parseInt(process.env.SYSAI_COMPACT_KEEP || '6')
+      if (history.length <= COMPACT_KEEP * 2) {
         process.stdout.write(`${DIM}Nothing to compact — only ${Math.floor(history.length / 2)} turns.${RESET}\n`)
         break
       }
-      const older  = history.slice(0, history.length - KEEP * 2)
-      const recent = history.slice(-KEEP * 2)
+      const older  = history.slice(0, history.length - COMPACT_KEEP * 2)
+      const recent = history.slice(-COMPACT_KEEP * 2)
       process.stdout.write(`${DIM}  Summarising ${Math.floor(older.length / 2)} older turns…${RESET}`)
       try {
         const { generateText } = await import('ai')
         const { getModel }     = await import('./provider.js')
-        const transcript = older.map(m =>
-          `${m.role}: ${typeof m.content === 'string' ? m.content.slice(0, 600) : '[tool output]'}`
-        ).join('\n')
+
+        // Extract readable text from all message types including tool calls/results
+        const transcript = older.map(m => {
+          let text
+          if (typeof m.content === 'string') {
+            text = m.content.slice(0, 600)
+          } else if (Array.isArray(m.content)) {
+            text = m.content.map(p => {
+              if (p.type === 'text')        return p.text
+              if (p.type === 'tool-call')   return `[ran: ${p.toolName} ${JSON.stringify(p.input ?? {}).slice(0, 120)}]`
+              if (p.type === 'tool-result') return `[result: ${String(p.output?.value ?? p.result ?? '').slice(0, 200)}]`
+              return `[${p.type}]`
+            }).join(' ').slice(0, 600)
+          }
+          return `${m.role}: ${text}`
+        }).join('\n')
+
         const { text } = await generateText({
           model:     getModel(),
           prompt:    `Summarise this conversation concisely. Preserve key facts, commands run, findings, errors, and decisions:\n\n${transcript}`,
@@ -326,8 +345,11 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
           { role: 'assistant', content: text },
           ...recent,
         ]
-        setSession(summarised, getCurrentSession())
-        process.stdout.write(`\r${GREEN}✓${RESET} Compacted to summary + last ${KEEP} turns.${' '.repeat(20)}\n`)
+        const currentSession = getCurrentSession()
+        setSession(summarised, currentSession)
+        // Persist the compacted history so resume after quit reflects the compact
+        writeCompactedSession(currentSession, summarised)
+        process.stdout.write(`\r${GREEN}✓${RESET} Compacted to summary + last ${COMPACT_KEEP} turns.${' '.repeat(20)}\n`)
       } catch (err) {
         process.stdout.write(`\r${RED}Compact failed: ${formatApiError(err)}${RESET}\n`)
       }
@@ -353,7 +375,6 @@ async function handleCommand(input, history, rl, { getCurrentSession, setSession
         process.stdout.write(`${DIM}No models configured. Run: sysai setup${RESET}\n`)
         break
       }
-      const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
       const targetName = args[0]
       if (targetName) {
         try {

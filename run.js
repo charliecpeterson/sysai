@@ -5,9 +5,12 @@
  * runAgentWithUI(opts)   → { text, messages }
  */
 
-import { runAgent }       from './agent.js'
+import { runAgent, parseToolArgs } from './agent.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW } from './colors.js'
+
+// Paths that require explicit user confirmation even in auto-approve mode.
+const SENSITIVE_PATH_RE = /\.ssh\/|\.gnupg\/|\.bashrc|\.zshrc|\.bash_profile|\.zprofile|\.profile|\.bash_logout|authorized_keys|known_hosts|id_rsa|id_ed25519|\/etc\/|sudoers/i
 
 /**
  * Build an onToolApproval function.
@@ -25,10 +28,7 @@ export function makeApproval(rl, {
 } = {}) {
   return async function onToolApproval(toolUse) {
     const name = toolUse.toolName
-    const raw  = toolUse.input ?? toolUse.args
-    const args = typeof raw === 'string'
-      ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
-      : (raw ?? {})
+    const args = parseToolArgs(toolUse.input ?? toolUse.args)
 
     if (name === 'read_file') {
       writeFn(`${DIM}  ○ read  ${args.path ?? '?'}${RESET}\n`)
@@ -55,11 +55,15 @@ export function makeApproval(rl, {
     }
 
     if (name === 'write_file') {
-      writeFn(`\n${RED}  ● write${RESET}  ${args.path}\n`)
+      const isSensitive = SENSITIVE_PATH_RE.test(args.path ?? '')
+      writeFn(`\n${RED}  ● write${RESET}  ${args.path}${isSensitive ? `  ${YELLOW}(sensitive path)${RESET}` : ''}\n`)
       renderWriteDiff(args.path, args.content ?? '', (line) => writeFn(line + '\n'))
-      if (autoApprove || autoApproveWrite) {
+      if ((autoApprove || autoApproveWrite) && !isSensitive) {
         writeFn(`${DIM}  (auto-approved)${RESET}\n`)
         return 'approved'
+      }
+      if (isSensitive && (autoApprove || autoApproveWrite)) {
+        writeFn(`${YELLOW}  sensitive path — confirmation required regardless of -y${RESET}\n`)
       }
       return new Promise((resolve) => {
         rl.question(`${DIM}  write? [Y/n]: ${RESET}`, (answer) => {

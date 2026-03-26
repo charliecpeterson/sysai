@@ -30,7 +30,11 @@ export function createSession(hostname = 'unknown') {
   const file = join(HISTORY_DIR, `${safe}.jsonl`)
 
   const meta = { type: 'meta', ts, hostname, title: null, turns: 0 }
-  writeFileSync(file, JSON.stringify(meta).padEnd(HEADER_SIZE) + '\n', 'utf8')
+  const metaBuf = Buffer.from(JSON.stringify(meta), 'utf8')
+  const padded  = Buffer.alloc(HEADER_SIZE + 1, 0x20)
+  metaBuf.copy(padded, 0, 0, Math.min(metaBuf.length, HEADER_SIZE))
+  padded[HEADER_SIZE] = 0x0A
+  writeFileSync(file, padded)
 
   return { file, meta }
 }
@@ -127,6 +131,32 @@ export function loadSessionMeta(filePath) {
 }
 
 /**
+ * Overwrite a session file with a compacted message set.
+ * Rewrites the entire file: header + simplified user/assistant pairs only.
+ * Tool-call messages are dropped since they can't survive reload anyway.
+ */
+export function writeCompactedSession(session, messages) {
+  if (!session?.file) return
+  try {
+    // Rebuild the file: header + one line per user/assistant message
+    const meta = { ...session.meta }
+    const metaBuf = Buffer.from(JSON.stringify(meta), 'utf8')
+    const header  = Buffer.alloc(HEADER_SIZE + 1, 0x20)
+    metaBuf.copy(header, 0, 0, Math.min(metaBuf.length, HEADER_SIZE))
+    header[HEADER_SIZE] = 0x0A
+
+    const msgLines = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => JSON.stringify({ role: m.role, content: typeof m.content === 'string' ? m.content : '[compacted]' }) + '\n')
+      .join('')
+
+    writeFileSync(session.file, Buffer.concat([header, Buffer.from(msgLines, 'utf8')]))
+  } catch {
+    // Non-fatal — in-memory compact still works
+  }
+}
+
+/**
  * Delete a session file.
  */
 export function deleteSession(filePath) {
@@ -215,9 +245,11 @@ function ensureDir() {
 function readFirstLine(filePath) {
   const fd = openSync(filePath, 'r')
   try {
-    const buf = Buffer.alloc(1024)
-    const bytesRead = readSync(fd, buf, 0, 1024, 0)
-    const chunk = buf.toString('utf8', 0, bytesRead)
+    // Read enough bytes to cover the padded header (HEADER_SIZE + newline + a small margin)
+    const readSize = HEADER_SIZE + 64
+    const buf = Buffer.alloc(readSize)
+    const bytesRead = readSync(fd, buf, 0, readSize, 0)
+    const chunk    = buf.toString('utf8', 0, bytesRead)
     const newlineIdx = chunk.indexOf('\n')
     return newlineIdx >= 0 ? chunk.slice(0, newlineIdx) : chunk
   } finally {
@@ -227,8 +259,13 @@ function readFirstLine(filePath) {
 
 function rewriteMeta(session) {
   try {
-    const json = JSON.stringify(session.meta)
-    const padded = Buffer.from(json.padEnd(HEADER_SIZE) + '\n', 'utf8')
+    // Work in bytes, not characters — non-ASCII (emoji, accented chars) can make
+    // padEnd(HEADER_SIZE) produce more bytes than HEADER_SIZE, overwriting message data.
+    const jsonBuf = Buffer.from(JSON.stringify(session.meta), 'utf8')
+    // Allocate exactly HEADER_SIZE + 1 bytes (newline), filled with spaces
+    const padded = Buffer.alloc(HEADER_SIZE + 1, 0x20)
+    jsonBuf.copy(padded, 0, 0, Math.min(jsonBuf.length, HEADER_SIZE))
+    padded[HEADER_SIZE] = 0x0A  // newline
     const fd = openSync(session.file, 'r+')
     try { writeSync(fd, padded, 0, padded.length, 0) }
     finally { closeSync(fd) }

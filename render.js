@@ -45,14 +45,17 @@ export function createSpinner(writeFn) {
 
 const DIFF_CAP = 40   // max lines shown
 
+function showAllGreen(content, writeFn) {
+  const lines = content.split('\n')
+  const show  = lines.slice(0, DIFF_CAP)
+  for (const l of show) writeFn(`${GREEN}+ ${l}${RESET}`)
+  if (lines.length > DIFF_CAP)
+    writeFn(`${DIM}  … ${lines.length - DIFF_CAP} more lines${RESET}`)
+}
+
 export function renderWriteDiff(filePath, newContent, writeFn) {
   if (!existsSync(filePath)) {
-    // New file — show content with green + prefix
-    const lines = newContent.split('\n')
-    const show = lines.slice(0, DIFF_CAP)
-    for (const l of show) writeFn(`${GREEN}+ ${l}${RESET}`)
-    if (lines.length > DIFF_CAP)
-      writeFn(`${DIM}  … ${lines.length - DIFF_CAP} more lines${RESET}`)
+    showAllGreen(newContent, writeFn)
     return
   }
 
@@ -64,6 +67,13 @@ export function renderWriteDiff(filePath, newContent, writeFn) {
     writeFileSync(newFile, newContent)
     const r = spawnSync('diff', ['-u', '--label', filePath, '--label', filePath, oldFile, newFile],
       { encoding: 'utf8' })
+
+    // r.status === null means diff binary not found; fall through to plain display
+    if (r.status === null) {
+      showAllGreen(newContent, writeFn)
+      return
+    }
+
     const raw = r.stdout || ''
     if (!raw.trim()) {
       writeFn(`${DIM}  (no changes)${RESET}`)

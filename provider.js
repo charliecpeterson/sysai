@@ -8,7 +8,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI }    from '@ai-sdk/openai'
 import { getActiveConfig } from './models.js'
 
-const DEFAULTS = {
+export const DEFAULTS = {
   anthropic: 'claude-sonnet-4-6',
   openai:    'gpt-4o',
   llamacpp:  'local',

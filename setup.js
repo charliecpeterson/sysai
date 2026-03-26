@@ -13,6 +13,7 @@ import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
 import { formatApiError } from './errors.js'
+import { DEFAULTS } from './provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 
 export async function setup() {
@@ -117,7 +118,6 @@ export async function setup() {
 }
 
 async function addModelWizard(ask, rl) {
-  const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   process.stdout.write(`  Which provider?\n\n`)
   process.stdout.write(`    1) Anthropic  ${DIM}(Claude)${RESET}\n`)
@@ -179,13 +179,12 @@ export async function status() {
   // Ping all models in parallel with 8s timeout
   process.stdout.write(`  ${DIM}checking models…${RESET}\n\n`)
 
-  const TIMEOUT = 30_000
   const ping = async (cfg) => {
     try {
       const mdl = getModelInstance(cfg)
       await Promise.race([
         generateText({ model: mdl, prompt: 'Reply: ok', maxTokens: 4 }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), TIMEOUT)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30_000)),
       ])
       return { ok: true }
     } catch (err) {
@@ -198,8 +197,6 @@ export async function status() {
   // Column widths
   const maxName  = Math.max(...models.map(m => m.name.length), 4)
   const maxProv  = Math.max(...models.map(m => m.provider.length), 8)
-  const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
-
   for (let i = 0; i < models.length; i++) {
     const m = models[i]
     const r = results[i]
@@ -214,15 +211,21 @@ export async function status() {
 
   process.stdout.write('\n')
 
-  const maxTurns = process.env.SYSAI_MAX_TURNS || '20 (default)'
-  process.stdout.write(`  ${DIM}max turns:${RESET}  ${maxTurns}\n`)
+  const ev = (name, def) => {
+    const val = process.env[name]
+    return val ? `${val} ${DIM}(from env)${RESET}` : `${DIM}${def} (default)${RESET}`
+  }
+  process.stdout.write(`  ${DIM}env vars:${RESET}\n`)
+  process.stdout.write(`    SYSAI_MAX_TURNS       ${ev('SYSAI_MAX_TURNS',      '20')}  — max agent iterations per query\n`)
+  process.stdout.write(`    SYSAI_MAX_TOKENS      ${ev('SYSAI_MAX_TOKENS',   '8192')}  — max tokens per response\n`)
+  process.stdout.write(`    SYSAI_BASH_TIMEOUT    ${ev('SYSAI_BASH_TIMEOUT',  '120')}  — seconds before killing a bash command\n`)
+  process.stdout.write(`    SYSAI_COMPACT_KEEP    ${ev('SYSAI_COMPACT_KEEP',    '6')}  — turns to keep when compacting\n`)
   process.stdout.write(`\n  ${DIM}sysai model <name>${RESET}   switch active model\n`)
   process.stdout.write(`  ${DIM}sysai setup${RESET}           add / remove models\n\n`)
 }
 
 export async function listModels() {
   const { loadModels } = await import('./models.js')
-  const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   const data = loadModels()
   if (!data?.models?.length) {
@@ -254,7 +257,6 @@ export async function listModels() {
 
 export async function switchModel(name) {
   const { loadModels, switchActive } = await import('./models.js')
-  const DEFAULTS = { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o', llamacpp: 'local' }
 
   const data = loadModels()
   if (!data?.models?.length) {

@@ -11,12 +11,16 @@ import { join }    from 'path'
 
 export const MODELS_PATH = join(homedir(), '.sysai', 'models.json')
 
+let _cache = null
+
 export function loadModels() {
   if (!existsSync(MODELS_PATH)) return null
-  try { return JSON.parse(readFileSync(MODELS_PATH, 'utf8')) } catch { return null }
+  if (_cache) return _cache
+  try { _cache = JSON.parse(readFileSync(MODELS_PATH, 'utf8')); return _cache } catch { return null }
 }
 
 export function saveModels(data) {
+  _cache = data  // keep cache consistent with what we write
   mkdirSync(join(homedir(), '.sysai'), { recursive: true })
   writeFileSync(MODELS_PATH, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
 }
