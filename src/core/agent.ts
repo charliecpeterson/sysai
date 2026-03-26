@@ -11,6 +11,7 @@ import { z }                 from 'zod'
 import { spawn }             from 'child_process'
 import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
+import { isMcpTool }         from './mcp-client.js'
 import { DIM, YELLOW, RESET } from '../ui/colors.js'
 import type { AgentOptions, AgentResult } from '../types.js'
 
@@ -56,12 +57,18 @@ then request specific sections based on what you find. Never assume truncated ou
  */
 export async function runAgent({
   systemPrompt, messages, onToken, onToolApproval, onToolResult,
-  onThinking, onThinkingDone, abortSignal,
+  onThinking, onThinkingDone, abortSignal, mcpManager,
 }: AgentOptions): Promise<AgentResult> {
   const model   = getModel()
   const history = [...messages] as ModelMessage[]
   let fullText  = ''
   let iterations = 0
+
+  // Merge built-in tools with any MCP tools for this session
+  const allTools = {
+    ...TOOLS,
+    ...(mcpManager ? mcpManager.getAiSdkTools() as typeof TOOLS : {}),
+  }
 
   while (iterations++ < MAX_ITERATIONS) {
     onThinking?.()
@@ -77,7 +84,7 @@ export async function runAgent({
         model,
         system:    systemPrompt,
         messages:  history,
-        tools:     TOOLS,
+        tools:     allTools,
         maxOutputTokens: parseInt(process.env.SYSAI_MAX_TOKENS || '8192'),
         ...(abortSignal && { abortSignal }),
       })
@@ -151,7 +158,9 @@ export async function runAgent({
           : { ...call, input: { command: decision } }
 
         const t0 = Date.now()
-        resultContent = await executeTool(finalCall as typeof call)
+        resultContent = isMcpTool(call.toolName) && mcpManager
+          ? await mcpManager.callTool(call.toolName, parseToolArgs(finalCall.input ?? (finalCall as unknown as Record<string,unknown>).args))
+          : await executeTool(finalCall as typeof call)
         onToolResult?.(finalCall, resultContent, Date.now() - t0)
       }
 

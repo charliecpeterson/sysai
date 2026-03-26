@@ -7,8 +7,9 @@
 
 import type { Interface as RLInterface } from 'readline'
 import { runAgent, parseToolArgs } from '../core/agent.js'
+import { getMcpManager } from '../core/mcp-client.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
-import { RESET, DIM, RED, GREEN, YELLOW } from './colors.js'
+import { RESET, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
 
 // Paths that require explicit user confirmation even in auto-approve mode.
@@ -70,6 +71,25 @@ export function makeApproval(rl: RLInterface, {
       })
     }
 
+    // MCP tools — show server + tool + args summary, ask for approval
+    if (name.startsWith('mcp__')) {
+      const parts      = name.split('__')
+      const serverName = parts[1] ?? '?'
+      const toolName   = parts.slice(2).join('__') || '?'
+      const argsStr    = JSON.stringify(args)
+      writeFn(`\n${CYAN}  ● mcp${RESET}   ${DIM}${serverName}${RESET} / ${toolName}  ${DIM}${argsStr}${RESET}\n`)
+      if (autoApprove) {
+        writeFn(`${DIM}  (auto)${RESET}\n`)
+        return 'approved'
+      }
+      return new Promise((resolve) => {
+        rl.question(`${DIM}  call? [Y/n]: ${RESET}`, (answer) => {
+          const a = answer.trim().toLowerCase()
+          resolve(a === 'n' || a === 'no' ? 'rejected' : 'approved')
+        })
+      })
+    }
+
     return 'approved'
   }
 }
@@ -96,6 +116,15 @@ export async function runAgentWithUI({
   const writeFn        = (s: string) => uiStream.write(s)
   const onToolApproval = makeApproval(rl, { autoApprove, writeFn })
 
+  const mcpManager = await getMcpManager()
+
+  // Announce connected MCP servers (once per session, in TTY mode)
+  if (mcpManager && uiIsTTY) {
+    for (const { serverName, toolCount } of mcpManager.summary()) {
+      uiStream.write(`${DIM}  mcp  ${serverName} (${toolCount} tool${toolCount === 1 ? '' : 's'})${RESET}\n`)
+    }
+  }
+
   try {
     const result = await runAgent({
       systemPrompt,
@@ -110,6 +139,7 @@ export async function runAgentWithUI({
         if (uiIsTTY) uiStream.write(`${DIM}  ✓ ${(elapsedMs / 1000).toFixed(1)}s${RESET}\n`)
       },
       abortSignal,
+      mcpManager: mcpManager ?? undefined,
     })
     renderer?.flush()
     return result

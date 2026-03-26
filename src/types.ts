@@ -107,6 +107,11 @@ export interface AgentOptions {
   onThinking?: () => void
   onThinkingDone?: () => void
   abortSignal?: AbortSignal
+  /** Optional MCP client manager — exposes dynamically discovered tools from MCP servers. */
+  mcpManager?: {
+    getAiSdkTools(): Record<string, unknown>
+    callTool(name: string, args: Record<string, unknown>): Promise<string>
+  }
 }
 
 // ── MCP ───────────────────────────────────────────────────────────────────────
