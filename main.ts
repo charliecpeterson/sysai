@@ -70,6 +70,22 @@ switch (cmd) {
     process.exit(0)
   }
 
+  case 'mcp': {
+    const subCmd = rest[0]
+    const { listMcps, addMcp, removeMcp } = await import('./src/commands/mcp.js')
+    if (!subCmd || subCmd === 'list') {
+      await listMcps()
+    } else if (subCmd === 'add') {
+      await addMcp()
+    } else if (subCmd === 'remove' || subCmd === 'rm') {
+      removeMcp(rest[1])
+    } else {
+      process.stderr.write(`sysai: unknown mcp subcommand "${subCmd}". Try: list, add, remove\n`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
+
   case 'tasks': {
     const { listTasksCmd } = await import('./src/task/task.js')
     await listTasksCmd()
@@ -135,6 +151,11 @@ function printHelp(): void {
       ['task test <name>',   'Dry-run a task — show commands then AI analysis'],
       ['task edit <name>',   'Open task file in $EDITOR'],
       ['task rm <name>',     'Delete a task'],
+    ]],
+    ['MCP', [
+      ['mcp list',           'List configured MCP servers'],
+      ['mcp add',            'Add an MCP server (interactive wizard)'],
+      ['mcp remove <name>',  'Remove an MCP server'],
     ]],
     ['Config', [
       ['instructions',       'Edit ~/.sysai/instructions.md (injected into every query)'],

@@ -109,6 +109,19 @@ export interface AgentOptions {
   abortSignal?: AbortSignal
 }
 
+// ── MCP ───────────────────────────────────────────────────────────────────────
+
+export interface McpServerConfig {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  description?: string
+}
+
+export interface McpConfig {
+  servers: Record<string, McpServerConfig>
+}
+
 // ── UI ────────────────────────────────────────────────────────────────────────
 
 export interface ApprovalOptions {
