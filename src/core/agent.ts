@@ -11,7 +11,6 @@ import { z }                 from 'zod'
 import { spawn }             from 'child_process'
 import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
-import { isMcpTool }         from './mcp-client.js'
 import { DIM, YELLOW, RESET } from '../ui/colors.js'
 import type { AgentOptions, AgentResult } from '../types.js'
 
@@ -158,7 +157,7 @@ export async function runAgent({
           : { ...call, input: { command: decision } }
 
         const t0 = Date.now()
-        resultContent = isMcpTool(call.toolName) && mcpManager
+        resultContent = mcpManager?.hasTool(call.toolName)
           ? await mcpManager.callTool(call.toolName, parseToolArgs(finalCall.input ?? (finalCall as unknown as Record<string,unknown>).args))
           : await executeTool(finalCall as typeof call)
         onToolResult?.(finalCall, resultContent, Date.now() - t0)

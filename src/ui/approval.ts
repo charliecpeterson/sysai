@@ -7,7 +7,7 @@
 
 import type { Interface as RLInterface } from 'readline'
 import { runAgent, parseToolArgs } from '../core/agent.js'
-import { getMcpManager, isMcpTool } from '../core/mcp-client.js'
+import { getMcpManager } from '../core/mcp-client.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
 import { RESET, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
@@ -71,13 +71,11 @@ export function makeApproval(rl: RLInterface, {
       })
     }
 
-    // MCP tools — show server + tool + args summary, ask for approval
-    if (name.startsWith('mcp__')) {
-      const parts      = name.split('__')
-      const serverName = parts[1] ?? '?'
-      const toolName   = parts.slice(2).join('__') || '?'
-      const argsStr    = JSON.stringify(args)
-      writeFn(`\n${CYAN}  ● mcp${RESET}   ${DIM}${serverName}${RESET} / ${toolName}  ${DIM}${argsStr}${RESET}\n`)
+    // MCP tools — anything that isn't a built-in tool
+    const BUILTIN_TOOLS = new Set(['bash', 'read_file', 'write_file'])
+    if (!BUILTIN_TOOLS.has(name)) {
+      const argsStr = JSON.stringify(args)
+      writeFn(`\n${CYAN}  ● mcp${RESET}   ${name}  ${DIM}${argsStr}${RESET}\n`)
       if (autoApprove) {
         writeFn(`${DIM}  (auto)${RESET}\n`)
         return 'approved'
@@ -139,7 +137,7 @@ export async function runAgentWithUI({
         if (!uiIsTTY) return
         const toolName = (call as { toolName: string }).toolName
         const timing   = `${(elapsedMs / 1000).toFixed(1)}s`
-        if (isMcpTool(toolName)) {
+        if (mcpManager?.hasTool(toolName)) {
           // Show the raw result so users can see errors (e.g. bad API key, quota exceeded)
           const preview = (result as string).length > 300
             ? (result as string).slice(0, 300) + '…'

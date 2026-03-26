@@ -110,6 +110,7 @@ export interface AgentOptions {
   /** Optional MCP client manager — exposes dynamically discovered tools from MCP servers. */
   mcpManager?: {
     getAiSdkTools(): Record<string, unknown>
+    hasTool(name: string): boolean
     callTool(name: string, args: Record<string, unknown>): Promise<string>
   }
 }

@@ -134,7 +134,9 @@ class McpServerConnection {
 // ── Manager ──────────────────────────────────────────────────────────────────
 
 export class McpClientManager {
-  private conns = new Map<string, { conn: McpServerConnection; tools: McpToolDef[] }>()
+  private conns   = new Map<string, { conn: McpServerConnection; tools: McpToolDef[] }>()
+  /** Maps the registered tool key → { serverName, originalToolName } for routing. */
+  private toolMap = new Map<string, { serverName: string; originalName: string }>()
 
   async connectAll(servers: Record<string, McpServerConfig>): Promise<void> {
     await Promise.all(
@@ -152,27 +154,36 @@ export class McpClientManager {
     )
   }
 
-  /** Returns the MCP tools in AI SDK tool() format, keyed by mcp__<server>__<tool>. */
+  /**
+   * Returns tools in AI SDK format using the original MCP tool names as keys.
+   * If two servers expose a tool with the same name, the second is suffixed _<server>.
+   */
   getAiSdkTools(): Record<string, ReturnType<typeof tool>> {
     const out: Record<string, ReturnType<typeof tool>> = {}
     for (const [serverName, { tools }] of this.conns) {
       for (const t of tools) {
-        const key = mcpToolKey(serverName, t.name)
+        // Avoid collisions: if name already taken, suffix with server name
+        const key = out[t.name] ? `${t.name}_${sanitize(serverName)}` : t.name
         out[key] = tool({
           description: t.description || t.name,
           inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
         })
+        this.toolMap.set(key, { serverName, originalName: t.name })
       }
     }
     return out
   }
 
+  hasTool(name: string): boolean {
+    return this.toolMap.has(name)
+  }
+
   async callTool(toolKey: string, args: Record<string, unknown>): Promise<string> {
-    const parsed = parseMcpToolKey(toolKey)
-    if (!parsed) return `Error: invalid MCP tool key "${toolKey}"`
-    const entry = this.conns.get(parsed.serverName)
-    if (!entry)  return `Error: MCP server "${parsed.serverName}" is not connected`
-    return entry.conn.callTool(parsed.toolName, args)
+    const entry = this.toolMap.get(toolKey)
+    if (!entry) return `Error: unknown MCP tool "${toolKey}"`
+    const server = this.conns.get(entry.serverName)
+    if (!server) return `Error: MCP server "${entry.serverName}" is not connected`
+    return server.conn.callTool(entry.originalName, args)
   }
 
   /** Summary of connected servers for display purposes. */
@@ -214,25 +225,6 @@ export async function getMcpManager(): Promise<McpClientManager | null> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-export function isMcpTool(toolName: string): boolean {
-  return toolName.startsWith(MCP_PREFIX)
-}
-
-const MCP_PREFIX = 'mcp__'
-const SEP        = '__'
-
-function mcpToolKey(serverName: string, toolName: string): string {
-  return `${MCP_PREFIX}${sanitize(serverName)}${SEP}${sanitize(toolName)}`
-}
-
-function parseMcpToolKey(key: string): { serverName: string; toolName: string } | null {
-  if (!key.startsWith(MCP_PREFIX)) return null
-  const rest  = key.slice(MCP_PREFIX.length)
-  const idx   = rest.indexOf(SEP)
-  if (idx < 0) return null
-  return { serverName: rest.slice(0, idx), toolName: rest.slice(idx + SEP.length) }
-}
 
 function sanitize(s: string): string {
   return s.replace(/[^a-zA-Z0-9_]/g, '_')
