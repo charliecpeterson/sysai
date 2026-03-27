@@ -12,6 +12,8 @@ import { execSync } from 'child_process'
 import { homedir } from 'os'
 import { join, extname } from 'path'
 import type { KbConfig, KbMeta, KbChunk } from '../types.js'
+import { getActiveEmbeddingConfig } from './models.js'
+import { embedTexts } from '../core/embeddings.js'
 
 const KB_DIR     = join(homedir(), '.sysai', 'kb')
 const CONFIG_PATH = join(KB_DIR, 'config.json')
@@ -84,18 +86,23 @@ export function listKbs(): Array<{ name: string; active: boolean } & KbMeta> {
 
 /**
  * Read all docs in a KB's docs/ directory and produce an index.json of text chunks.
+ * If an active embedding is configured, also generates vectors.json.
  * Supports: .txt, .md, .markdown, .pdf (via pdftotext), .json, .csv, .log, .yaml, .yml
  */
-export function indexKb(name: string): { docCount: number; tokenEstimate: number } {
+export async function indexKb(
+  name: string,
+  onProgress?: (msg: string) => void,
+): Promise<{ docCount: number; tokenEstimate: number; embeddingModel: string | null }> {
   const config = loadKbConfig()
   if (!config.kbs[name]) throw new Error(`KB "${name}" not found`)
 
-  const docsDir  = join(KB_DIR, name, 'docs')
-  const indexPath = join(KB_DIR, name, 'index.json')
+  const docsDir    = join(KB_DIR, name, 'docs')
+  const indexPath  = join(KB_DIR, name, 'index.json')
+  const vectorPath = join(KB_DIR, name, 'vectors.json')
 
   if (!existsSync(docsDir)) {
     mkdirSync(docsDir, { recursive: true })
-    return { docCount: 0, tokenEstimate: 0 }
+    return { docCount: 0, tokenEstimate: 0, embeddingModel: null }
   }
 
   const files  = findFiles(docsDir)
@@ -104,9 +111,7 @@ export function indexKb(name: string): { docCount: number; tokenEstimate: number
   for (const file of files) {
     const text = extractText(file)
     if (!text.trim()) continue
-
-    const fileChunks = chunkText(text, file)
-    chunks.push(...fileChunks)
+    chunks.push(...chunkText(text, file))
   }
 
   writeFileSync(indexPath, JSON.stringify(chunks, null, 2), 'utf8')
@@ -114,12 +119,36 @@ export function indexKb(name: string): { docCount: number; tokenEstimate: number
   const totalChars    = chunks.reduce((sum, c) => sum + c.text.length, 0)
   const tokenEstimate = Math.ceil(totalChars / CHARS_PER_TOKEN)
 
-  config.kbs[name].lastIndexed   = new Date().toISOString()
-  config.kbs[name].docCount      = files.length
-  config.kbs[name].tokenEstimate = tokenEstimate
+  // Generate embeddings if an active embedding is configured
+  let embeddingModel: string | null = null
+  let embeddingDimensions: number | null = null
+  const embCfg = getActiveEmbeddingConfig()
+
+  if (embCfg && chunks.length > 0) {
+    onProgress?.(`embedding ${chunks.length} chunks with ${embCfg.name}...`)
+    try {
+      const vectors = await embedTexts(chunks.map(c => c.text), embCfg)
+      if (vectors.length === chunks.length) {
+        writeFileSync(vectorPath, JSON.stringify(vectors), 'utf8')
+        embeddingModel = embCfg.name
+        embeddingDimensions = vectors[0]?.length ?? null
+      }
+    } catch (err) {
+      onProgress?.(`embedding failed: ${(err as Error).message} — using BM25 only`)
+    }
+  } else if (!embCfg && existsSync(vectorPath)) {
+    // No active embedding — remove stale vectors
+    rmSync(vectorPath)
+  }
+
+  config.kbs[name].lastIndexed        = new Date().toISOString()
+  config.kbs[name].docCount           = files.length
+  config.kbs[name].tokenEstimate      = tokenEstimate
+  config.kbs[name].embeddingModel     = embeddingModel
+  config.kbs[name].embeddingDimensions = embeddingDimensions
   saveKbConfig(config)
 
-  return { docCount: files.length, tokenEstimate }
+  return { docCount: files.length, tokenEstimate, embeddingModel }
 }
 
 /**
@@ -216,10 +245,13 @@ export interface SearchResult {
 }
 
 /**
- * Search active KBs using BM25. Retrieves a wide net, stitches adjacent chunks
- * from the same file, and returns the top results.
+ * Search active KBs using hybrid BM25 + cosine similarity (if embeddings available),
+ * or BM25-only if no vectors exist. Returns stale embedding warnings via onWarn.
  */
-export function searchKb(query: string, opts: { limit?: number; kb?: string } = {}): SearchResult[] {
+export async function searchKb(
+  query: string,
+  opts: { limit?: number; kb?: string; onWarn?: (msg: string) => void } = {},
+): Promise<SearchResult[]> {
   const config = loadKbConfig()
   const limit = opts.limit ?? 8
   const targetKbs = opts.kb
@@ -300,9 +332,87 @@ export function searchKb(query: string, opts: { limit?: number; kb?: string } = 
 
   scored.sort((a, b) => b.score - a.score)
 
+  // Hybrid: try to load vectors and embed the query
+  const activeCfg = getActiveEmbeddingConfig()
+  let finalScored = scored
+
+  if (activeCfg) {
+    // Attempt to load vectors for each target KB and blend with BM25
+    const vectorsByKb = new Map<string, number[][]>()
+    let anyVectorsLoaded = false
+
+    for (const kbName of targetKbs) {
+      const kbMeta = config.kbs[kbName]
+      const vectorPath = join(KB_DIR, kbName, 'vectors.json')
+
+      if (!existsSync(vectorPath)) continue
+
+      if (kbMeta?.embeddingModel && kbMeta.embeddingModel !== activeCfg.name) {
+        opts.onWarn?.(`kb "${kbName}": embeddings were indexed with "${kbMeta.embeddingModel}" but active embedding is "${activeCfg.name}" — run sysai kb index ${kbName} to re-embed`)
+        continue
+      }
+
+      try {
+        const vecs = JSON.parse(readFileSync(vectorPath, 'utf8')) as number[][]
+        vectorsByKb.set(kbName, vecs)
+        anyVectorsLoaded = true
+      } catch {}
+    }
+
+    if (anyVectorsLoaded) {
+      // Build a mapping from allChunks index → vector
+      const chunkVecIndex = new Map<number, number[]>()
+      const kbChunkOffsets = new Map<string, number>()
+      let offset = 0
+      for (const kbName of targetKbs) {
+        kbChunkOffsets.set(kbName, offset)
+        const kbChunks = allChunks.filter(c => c.kb === kbName)
+        offset += kbChunks.length
+      }
+
+      // Re-map: allChunks index → vector from that KB's vectors.json
+      const kbChunkCounters = new Map<string, number>()
+      for (let i = 0; i < allChunks.length; i++) {
+        const kb = allChunks[i].kb
+        const vecs = vectorsByKb.get(kb)
+        if (!vecs) continue
+        const counter = kbChunkCounters.get(kb) ?? 0
+        kbChunkCounters.set(kb, counter + 1)
+        if (counter < vecs.length) chunkVecIndex.set(i, vecs[counter])
+      }
+
+      // Embed the query
+      try {
+        const { embedQuery, cosineSimilarity } = await import('../core/embeddings.js')
+        const queryVec = await embedQuery(query)
+
+        if (queryVec) {
+          // Normalize BM25 scores to 0-1
+          const maxBm25 = scored.length > 0 ? scored[0].score : 1
+          const BM25_WEIGHT    = 0.4
+          const COSINE_WEIGHT  = 0.6
+
+          // Score all chunks with hybrid
+          const hybridScored: Array<{ idx: number; score: number }> = []
+          for (let i = 0; i < N; i++) {
+            const bm25Raw   = scored.find(s => s.idx === i)?.score ?? 0
+            const bm25Norm  = maxBm25 > 0 ? bm25Raw / maxBm25 : 0
+            const vec       = chunkVecIndex.get(i)
+            const cosine    = vec ? cosineSimilarity(queryVec, vec) : 0
+            const hybrid    = BM25_WEIGHT * bm25Norm + COSINE_WEIGHT * cosine
+            if (hybrid > 0.01) hybridScored.push({ idx: i, score: hybrid })
+          }
+
+          hybridScored.sort((a, b) => b.score - a.score)
+          finalScored = hybridScored
+        }
+      } catch {}
+    }
+  }
+
   // Take wide retrieval (top 20), then stitch adjacent chunks from the same file
   const WIDE_LIMIT = Math.max(20, limit * 4)
-  const wide = scored.slice(0, WIDE_LIMIT)
+  const wide = finalScored.slice(0, WIDE_LIMIT)
 
   const stitched = stitchChunks(wide, allChunks)
 

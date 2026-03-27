@@ -16,6 +16,18 @@ export interface ModelConfig {
 export interface ModelsData {
   active: string | null
   models: ModelConfig[]
+  activeEmbedding?: string | null
+  embeddings?: EmbeddingConfig[]
+}
+
+export type EmbeddingProvider = 'openai' | 'openai-compatible'
+
+export interface EmbeddingConfig {
+  name: string
+  provider: EmbeddingProvider
+  model: string
+  apiKey?: string
+  baseUrl?: string
 }
 
 // ── Session / History ─────────────────────────────────────────────────────────
@@ -137,6 +149,8 @@ export interface KbMeta {
   lastIndexed: string | null
   docCount: number
   tokenEstimate: number
+  embeddingModel?: string | null
+  embeddingDimensions?: number | null
 }
 
 export interface KbConfig {

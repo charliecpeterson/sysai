@@ -355,7 +355,37 @@ sysai kb delete <name>     # remove a KB and all its docs
 
 New KBs start active. Use `sysai kb off` to keep a KB around without loading it into context. You can have multiple KBs — only active ones are used.
 
-For the best experience, keep frequently-used KBs under ~80k tokens so they stay in CAG mode. Larger KBs work fine in search mode but answers may require an extra second for the search step.
+For the best experience, keep frequently-used KBs under ~80k tokens so they stay in CAG mode. Larger KBs work fine in search mode — add an embedding model for better search quality.
+
+### Embedding models (optional, improves search mode)
+
+When an active embedding is configured, `sysai kb index` generates vector embeddings at index time. Search then uses hybrid scoring (BM25 + cosine similarity) for much better results than keyword matching alone.
+
+```bash
+sysai setup
+# e) Add embedding
+#   Provider: 1 (OpenAI) or 2 (OpenAI-compatible)
+#   For Ollama: base URL http://localhost:11434/v1, model nomic-embed-text
+#   For OpenAI: API key, model text-embedding-3-small
+```
+
+Then re-index your KBs:
+```bash
+sysai kb index h2docs
+  ✓ Indexed "h2docs": 57 files, ~375.0k tokens  embeddings: openai-small
+```
+
+If you switch embedding models, re-index affected KBs — `sysai kb list` shows a `(stale — re-index)` warning if the indexed embeddings don't match the active model.
+
+**Popular local embedding models (via Ollama):**
+
+| Model | Dims | Notes |
+|-------|------|-------|
+| `nomic-embed-text` | 768 | Best balance, beats OpenAI ada-002 |
+| `mxbai-embed-large` | 1024 | Highest quality |
+| `all-minilm` | 384 | Fastest, smallest |
+
+Embeddings only affect search mode — CAG mode always injects full text regardless.
 
 ## Configuration
 
@@ -364,17 +394,21 @@ For the best experience, keep frequently-used KBs under ~80k tokens so they stay
 sysai supports multiple named model configurations. Switch between them instantly.
 
 ```bash
-sysai setup     # add, remove, or change models
+sysai setup     # add, remove, or change LLM models and embedding models
 sysai models    # list all configured models
 sysai model     # interactive picker to switch active model
 sysai model claude-sonnet   # switch directly by name
 ```
 
-Example setup with multiple models:
+Example setup with multiple models and an embedding:
 ```
-  claude-sonnet   anthropic   claude-sonnet-4-6   ● active
-  gpt-4o          openai      gpt-4o
-  local-llama     llamacpp    llama3.2
+  LLM models:
+    claude-sonnet   anthropic   claude-sonnet-4-6   ← active
+    gpt-4o          openai      gpt-4o
+    local-llama     llamacpp    llama3.2
+
+  Embedding models:
+    openai-small    openai   text-embedding-3-small   ← active
 ```
 
 Model configs are stored in `~/.sysai/models.json` (chmod 600).
@@ -410,6 +444,10 @@ sysai status
   ●  local-llama     llamacpp    llama3.2
 
   ◆  get_weather  2 tools
+
+  ◇  openai-small   openai   text-embedding-3-small   ← active
+
+  ■  h2docs  57 docs, ~375k tokens  openai-small
 
   env vars:
     SYSAI_MAX_TURNS       20 (default)  — max agent iterations per query
@@ -650,6 +688,7 @@ sysai/
 │   │   └── setup.ts           ← model setup wizard, status, list, switch
 │   ├── core/
 │   │   ├── agent.ts           ← agentic loop: streamText → tool calls → approval → execute
+│   │   ├── embeddings.ts      ← embedding client: /v1/embeddings, cosine similarity
 │   │   ├── mcp-client.ts      ← MCP stdio client: connect, discover tools, forward calls
 │   │   ├── prompt.ts          ← system prompt + instructions.md loader
 │   │   └── provider.ts        ← AI SDK model instantiation (Anthropic, OpenAI, llama.cpp)

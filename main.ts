@@ -94,11 +94,11 @@ switch (cmd) {
     const subCmd = rest[0]
     const { addKb, listKb, indexKbCmd, activateKb, deactivateKb, deleteKbCmd } = await import('./src/commands/kb.js')
     if (!subCmd || subCmd === 'list') {
-      listKb()
+      await listKb()
     } else if (subCmd === 'add') {
       await addKb(rest.slice(1))
     } else if (subCmd === 'index') {
-      indexKbCmd(rest[1])
+      await indexKbCmd(rest[1])
     } else if (subCmd === 'on') {
       activateKb(rest[1])
     } else if (subCmd === 'off') {

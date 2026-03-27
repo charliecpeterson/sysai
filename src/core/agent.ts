@@ -191,7 +191,7 @@ export function parseToolArgs(raw: unknown): Record<string, unknown> {
   return (raw as Record<string, unknown>) ?? {}
 }
 
-async function executeTool(call: { toolName: string; input?: unknown; args?: unknown }): Promise<string> {
+async function executeTool(call: { toolName: string; input?: unknown; args?: unknown }): Promise<string> {  // eslint-disable-line @typescript-eslint/require-await
   const args = parseToolArgs(call.input ?? call.args)
 
   switch (call.toolName) {
@@ -246,7 +246,7 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
 
     case 'search_kb': {
       if (!args.query) return 'Error: no query provided'
-      const results = searchKb(args.query as string, {
+      const results = await searchKb(args.query as string, {
         limit: (args.limit as number) ?? 8,
         kb: args.kb as string | undefined,
       })

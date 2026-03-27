@@ -14,14 +14,14 @@ import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
 import { generateText } from 'ai'
-import { loadModels, addModel, removeModel, switchActive } from '../storage/models.js'
+import { loadModels, addModel, removeModel, switchActive, addEmbedding, removeEmbedding, switchActiveEmbedding } from '../storage/models.js'
 import { loadMcpConfig } from '../storage/mcp.js'
 import { McpClientManager } from '../core/mcp-client.js'
 import { listKbs, activeKbTokenEstimate } from '../storage/kb.js'
 import { formatApiError } from '../ui/errors.js'
 import { DEFAULTS, getModelInstance } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
-import type { ModelConfig, Provider } from '../types.js'
+import type { ModelConfig, Provider, EmbeddingConfig, EmbeddingProvider } from '../types.js'
 
 export async function setup(): Promise<void> {
   mkdirSync(`${homedir()}/.sysai`, { recursive: true })
@@ -35,11 +35,13 @@ export async function setup(): Promise<void> {
   while (true) {
     const data = loadModels()
     const models = data?.models ?? []
+    const embeddings = data?.embeddings ?? []
 
+    // Show configured LLMs
     if (models.length === 0) {
-      process.stdout.write(`  ${DIM}No models configured yet.${RESET}\n\n`)
+      process.stdout.write(`  ${DIM}No LLM models configured yet.${RESET}\n\n`)
     } else {
-      process.stdout.write(`  ${DIM}Configured models:${RESET}\n`)
+      process.stdout.write(`  ${DIM}LLM models:${RESET}\n`)
       for (const m of models) {
         const active = m.name === data?.active ? `  ${GREEN}← active${RESET}` : ''
         const modelId = m.model || `${DIM}(default)${RESET}`
@@ -48,11 +50,30 @@ export async function setup(): Promise<void> {
       process.stdout.write('\n')
     }
 
-    process.stdout.write(`  ${DIM}a${RESET}) Add model    `)
-    if (models.length > 0) {
-      process.stdout.write(`${DIM}r${RESET}) Remove model    ${DIM}s${RESET}) Set active    `)
+    // Show configured embeddings
+    if (embeddings.length > 0) {
+      process.stdout.write(`  ${DIM}Embedding models:${RESET}\n`)
+      for (const e of embeddings) {
+        const active = e.name === data?.activeEmbedding ? `  ${GREEN}← active${RESET}` : ''
+        process.stdout.write(`    ${BOLD}${e.name}${RESET}  ${DIM}${e.provider}${RESET}  ${e.model}${active}\n`)
+      }
+      process.stdout.write('\n')
     }
-    process.stdout.write(`${DIM}q${RESET}) Done\n`)
+
+    // Menu
+    process.stdout.write(`  ${DIM}a${RESET}) Add LLM model    `)
+    if (models.length > 0) {
+      process.stdout.write(`${DIM}r${RESET}) Remove LLM    ${DIM}s${RESET}) Set active LLM\n`)
+    } else {
+      process.stdout.write('\n')
+    }
+    process.stdout.write(`  ${DIM}e${RESET}) Add embedding    `)
+    if (embeddings.length > 0) {
+      process.stdout.write(`${DIM}d${RESET}) Remove embedding    ${DIM}x${RESET}) Set active embedding\n`)
+    } else {
+      process.stdout.write('\n')
+    }
+    process.stdout.write(`  ${DIM}q${RESET}) Done\n`)
 
     const choice = (await ask('  Choice: ')).trim().toLowerCase()
     process.stdout.write('\n')
@@ -93,7 +114,7 @@ export async function setup(): Promise<void> {
     }
 
     if (choice === 'r' && models.length > 0) {
-      const name = (await ask('  Model name to remove: ')).trim()
+      const name = (await ask('  LLM name to remove: ')).trim()
       if (!name || !models.find(m => m.name === name)) {
         process.stdout.write(`${RED}  Not found: "${name}"${RESET}\n\n`)
       } else {
@@ -104,10 +125,66 @@ export async function setup(): Promise<void> {
     }
 
     if (choice === 's' && models.length > 0) {
-      const name = (await ask('  Model name to activate: ')).trim()
+      const name = (await ask('  LLM name to activate: ')).trim()
       try {
         switchActive(name)
         process.stdout.write(`${GREEN}  ✓ Active model set to "${name}"${RESET}\n\n`)
+      } catch (err) {
+        process.stdout.write(`${RED}  ${(err as Error).message}${RESET}\n\n`)
+      }
+      continue
+    }
+
+    if (choice === 'e') {
+      const cfg = await addEmbeddingWizard(ask)
+      if (!cfg) { process.stdout.write('\n'); continue }
+
+      addEmbedding(cfg)
+      process.stdout.write(`\n${GREEN}  ✓ Added embedding "${cfg.name}"${RESET}\n\n`)
+
+      // Health check — test embedding endpoint
+      process.stdout.write(`  ${DIM}Testing embedding...${RESET}`)
+      try {
+        const { embedTexts } = await import('../core/embeddings.js')
+        const result = await embedTexts(['test'], cfg)
+        if (result.length > 0 && result[0].length > 0) {
+          process.stdout.write(`\r${GREEN}  ✓ Embedding works! (${result[0].length} dimensions)${RESET}                    \n\n`)
+        } else {
+          throw new Error('empty result')
+        }
+      } catch (err) {
+        process.stdout.write(`\r${RED}  ✗ ${(err as Error).message}${RESET}\n`)
+        process.stdout.write(`  ${DIM}Config saved — fix and test with: sysai status${RESET}\n\n`)
+      }
+
+      // Offer to set as active
+      if (loadModels()?.activeEmbedding !== cfg.name) {
+        const setActive = (await ask(`  Set "${cfg.name}" as active embedding? [Y/n]: `)).trim().toLowerCase()
+        if (setActive !== 'n' && setActive !== 'no') {
+          switchActiveEmbedding(cfg.name)
+          process.stdout.write(`${GREEN}  ✓ Active embedding set to "${cfg.name}"${RESET}\n`)
+        }
+      }
+      process.stdout.write('\n')
+      continue
+    }
+
+    if (choice === 'd' && embeddings.length > 0) {
+      const name = (await ask('  Embedding name to remove: ')).trim()
+      if (!name || !embeddings.find(e => e.name === name)) {
+        process.stdout.write(`${RED}  Not found: "${name}"${RESET}\n\n`)
+      } else {
+        removeEmbedding(name)
+        process.stdout.write(`${GREEN}  ✓ Removed embedding "${name}"${RESET}\n\n`)
+      }
+      continue
+    }
+
+    if (choice === 'x' && embeddings.length > 0) {
+      const name = (await ask('  Embedding name to activate: ')).trim()
+      try {
+        switchActiveEmbedding(name)
+        process.stdout.write(`${GREEN}  ✓ Active embedding set to "${name}"${RESET}\n\n`)
       } catch (err) {
         process.stdout.write(`${RED}  ${(err as Error).message}${RESET}\n\n`)
       }
@@ -162,6 +239,50 @@ async function addModelWizard(
   cfg.name = name
 
   return cfg as ModelConfig
+}
+
+const EMBEDDING_DEFAULTS: Record<string, string> = {
+  'openai': 'text-embedding-3-small',
+  'openai-compatible': 'nomic-embed-text',
+}
+
+async function addEmbeddingWizard(
+  ask: (q: string) => Promise<string>,
+): Promise<EmbeddingConfig | null> {
+  process.stdout.write(`  Which embedding provider?\n\n`)
+  process.stdout.write(`    1) OpenAI              ${DIM}(text-embedding-3-small, text-embedding-3-large)${RESET}\n`)
+  process.stdout.write(`    2) OpenAI-compatible   ${DIM}(Ollama, llama.cpp, Voyage, Cohere, etc.)${RESET}\n\n`)
+
+  const choice = (await ask('  Choose [1/2]: ')).trim()
+  let provider: EmbeddingProvider
+
+  if      (choice === '1') { provider = 'openai' }
+  else if (choice === '2') { provider = 'openai-compatible' }
+  else { process.stdout.write(`${RED}  Invalid choice.${RESET}\n`); return null }
+
+  const cfg: Partial<EmbeddingConfig> & { provider: EmbeddingProvider } = { provider }
+
+  if (provider === 'openai') {
+    cfg.apiKey = (await ask('  OpenAI API key: ')).trim()
+    if (!cfg.apiKey) { process.stdout.write(`${RED}  No API key provided.${RESET}\n`); return null }
+    const base = (await ask(`  Base URL ${DIM}(Enter for default)${RESET}: `)).trim()
+    if (base) cfg.baseUrl = base
+  } else {
+    cfg.baseUrl = (await ask('  Base URL (e.g. http://localhost:11434/v1): ')).trim()
+    if (!cfg.baseUrl) { process.stdout.write(`${RED}  No base URL provided.${RESET}\n`); return null }
+    const key = (await ask(`  API key ${DIM}(Enter to skip)${RESET}: `)).trim()
+    if (key) cfg.apiKey = key
+  }
+
+  const defaultModel = EMBEDDING_DEFAULTS[provider] ?? 'text-embedding-3-small'
+  const modelId = (await ask(`  Model ID ${DIM}(Enter for ${defaultModel})${RESET}: `)).trim()
+  cfg.model = modelId || defaultModel
+
+  const suggestedName = cfg.model.replace(/[^a-z0-9._-]/gi, '-').toLowerCase()
+  const name = (await ask(`  Config name ${DIM}(Enter for "${suggestedName}")${RESET}: `)).trim() || suggestedName
+  cfg.name = name
+
+  return cfg as EmbeddingConfig
 }
 
 export async function status(): Promise<void> {
@@ -234,6 +355,19 @@ export async function status(): Promise<void> {
     mcpManager.closeAll()
   }
 
+  // Embedding models
+  const embeddings = data?.embeddings ?? []
+  if (embeddings.length > 0) {
+    process.stdout.write('\n')
+    for (const e of embeddings) {
+      const isActive = e.name === data?.activeEmbedding
+      const dot = isActive ? `${GREEN}◇${RESET}` : `${DIM}◇${RESET}`
+      const activeMark = isActive ? `  ${GREEN}${BOLD}← active${RESET}` : ''
+      const name = isActive ? `${BOLD}${e.name}${RESET}` : e.name
+      process.stdout.write(`  ${dot}  ${name}  ${DIM}${e.provider}${RESET}  ${e.model}${activeMark}\n`)
+    }
+  }
+
   // Knowledge bases
   const kbs = listKbs()
   if (kbs.length > 0) {
@@ -242,12 +376,21 @@ export async function status(): Promise<void> {
     const totalTokens = activeKbTokenEstimate()
     const activeCount = kbs.filter(k => k.active).length
 
+    const activeEmbName = data?.activeEmbedding ?? null
     for (const k of kbs) {
       const dot = k.active ? `${GREEN}■${RESET}` : `${DIM}□${RESET}`
       const tokens = k.tokenEstimate > 0 ? formatTokensShort(k.tokenEstimate) : 'n/a'
       const docs = `${k.docCount} doc${k.docCount === 1 ? '' : 's'}`
       const indexed = k.lastIndexed ? '' : `  ${YELLOW}(not indexed)${RESET}`
-      process.stdout.write(`  ${dot}  ${k.name}  ${DIM}${docs}, ~${tokens} tokens${RESET}${indexed}\n`)
+      let embNote = ''
+      if (k.embeddingModel) {
+        if (activeEmbName && k.embeddingModel !== activeEmbName) {
+          embNote = `  ${YELLOW}embeddings stale${RESET}`
+        } else {
+          embNote = `  ${DIM}${k.embeddingModel}${RESET}`
+        }
+      }
+      process.stdout.write(`  ${dot}  ${k.name}  ${DIM}${docs}, ~${tokens} tokens${RESET}${embNote}${indexed}\n`)
     }
 
     if (activeCount > 0) {

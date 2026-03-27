@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join }    from 'path'
-import type { ModelConfig, ModelsData } from '../types.js'
+import type { ModelConfig, ModelsData, EmbeddingConfig } from '../types.js'
 
 export const MODELS_PATH = join(homedir(), '.sysai', 'models.json')
 
@@ -56,5 +56,42 @@ export function removeModel(name: string): void {
   if (!data) return
   data.models = data.models.filter(m => m.name !== name)
   if (data.active === name) data.active = data.models[0]?.name ?? null
+  saveModels(data)
+}
+
+// ── Embedding config ─────────────────────────────────────────────────────────
+
+export function getActiveEmbeddingConfig(): EmbeddingConfig | null {
+  const data = loadModels()
+  if (!data?.embeddings?.length) return null
+  return data.embeddings.find(e => e.name === data.activeEmbedding) ?? null
+}
+
+export function addEmbedding(cfg: EmbeddingConfig): void {
+  const data = loadModels() ?? { active: null, models: [] }
+  if (!data.embeddings) data.embeddings = []
+  const idx = data.embeddings.findIndex(e => e.name === cfg.name)
+  if (idx >= 0) data.embeddings[idx] = cfg
+  else data.embeddings.push(cfg)
+  if (!data.activeEmbedding) data.activeEmbedding = cfg.name
+  saveModels(data)
+}
+
+export function removeEmbedding(name: string): void {
+  const data = loadModels()
+  if (!data?.embeddings) return
+  data.embeddings = data.embeddings.filter(e => e.name !== name)
+  if (data.activeEmbedding === name) {
+    data.activeEmbedding = data.embeddings[0]?.name ?? null
+  }
+  saveModels(data)
+}
+
+export function switchActiveEmbedding(name: string): void {
+  const data = loadModels()
+  if (!data?.embeddings?.length) throw new Error('No embeddings configured. Run: sysai setup')
+  if (!data.embeddings.find(e => e.name === name))
+    throw new Error(`No embedding named "${name}".`)
+  data.activeEmbedding = name
   saveModels(data)
 }

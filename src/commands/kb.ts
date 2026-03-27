@@ -54,7 +54,7 @@ export async function addKb(args: string[]): Promise<void> {
   process.stdout.write(`  Then run: ${CYAN}sysai kb index ${name}${RESET}\n\n`)
 }
 
-export function listKb(): void {
+export async function listKb(): Promise<void> {
   const kbs = listKbs()
 
   if (kbs.length === 0) {
@@ -66,20 +66,33 @@ export function listKb(): void {
   process.stdout.write('\n')
   const maxName = Math.max(...kbs.map(k => k.name.length), 4)
 
-  process.stdout.write(`  ${DIM}${'NAME'.padEnd(maxName)}  DOCS  TOKENS    STATUS${RESET}\n`)
-  process.stdout.write(`  ${DIM}${'-'.repeat(maxName + 35)}${RESET}\n`)
+  process.stdout.write(`  ${DIM}${'NAME'.padEnd(maxName)}  DOCS  TOKENS    STATUS         EMBEDDING${RESET}\n`)
+  process.stdout.write(`  ${DIM}${'-'.repeat(maxName + 55)}${RESET}\n`)
+
+  const { getActiveEmbeddingConfig } = await import('../storage/models.js')
+  const activeCfg = getActiveEmbeddingConfig()
 
   for (const k of kbs) {
-    const status = k.active ? `${GREEN}● active${RESET}` : `${DIM}○ inactive${RESET}`
-    const docs   = String(k.docCount).padStart(4)
-    const tokens = k.tokenEstimate > 0 ? formatTokens(k.tokenEstimate).padStart(8) : `${DIM}     n/a${RESET}`
+    const status  = k.active ? `${GREEN}● active${RESET}  ` : `${DIM}○ inactive${RESET}`
+    const docs    = String(k.docCount).padStart(4)
+    const tokens  = k.tokenEstimate > 0 ? formatTokens(k.tokenEstimate).padStart(8) : `${DIM}     n/a${RESET}`
     const indexed = k.lastIndexed ? '' : `  ${YELLOW}(not indexed)${RESET}`
-    process.stdout.write(`  ${BOLD}${k.name.padEnd(maxName)}${RESET}  ${docs}  ${tokens}  ${status}${indexed}\n`)
+
+    let embNote = `${DIM}none${RESET}`
+    if (k.embeddingModel) {
+      if (activeCfg && k.embeddingModel !== activeCfg.name) {
+        embNote = `${YELLOW}${k.embeddingModel} (stale — re-index)${RESET}`
+      } else {
+        embNote = `${GREEN}${k.embeddingModel}${RESET}`
+      }
+    }
+
+    process.stdout.write(`  ${BOLD}${k.name.padEnd(maxName)}${RESET}  ${docs}  ${tokens}  ${status}  ${embNote}${indexed}\n`)
   }
   process.stdout.write('\n')
 }
 
-export function indexKbCmd(name?: string): void {
+export async function indexKbCmd(name?: string): Promise<void> {
   if (!name) {
     process.stderr.write(`${RED}sysai: specify a KB name to index. Run: sysai kb list${RESET}\n`)
     process.exit(1)
@@ -88,8 +101,11 @@ export function indexKbCmd(name?: string): void {
   process.stdout.write(`${DIM}  indexing "${name}"...${RESET}`)
 
   try {
-    const { docCount, tokenEstimate } = indexKb(name)
-    process.stdout.write(`\r${GREEN}  ✓ Indexed "${name}": ${docCount} file${docCount === 1 ? '' : 's'}, ~${formatTokens(tokenEstimate)} tokens${RESET}\n`)
+    const { docCount, tokenEstimate, embeddingModel } = await indexKb(name, (msg) => {
+      process.stdout.write(`\r${DIM}  ${msg}${RESET}                    `)
+    })
+    const embNote = embeddingModel ? `  ${DIM}embeddings: ${embeddingModel}${RESET}` : ''
+    process.stdout.write(`\r${GREEN}  ✓ Indexed "${name}": ${docCount} file${docCount === 1 ? '' : 's'}, ~${formatTokens(tokenEstimate)} tokens${RESET}${embNote}\n`)
   } catch (err) {
     process.stdout.write('\n')
     process.stderr.write(`${RED}sysai: ${(err as Error).message}${RESET}\n`)
