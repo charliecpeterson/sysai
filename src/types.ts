@@ -113,6 +113,8 @@ export interface AgentOptions {
     hasTool(name: string): boolean
     callTool(name: string, args: Record<string, unknown>): Promise<string>
   }
+  /** When true, the search_kb tool is added for BM25 search over active knowledge bases. */
+  enableKbSearch?: boolean
 }
 
 // ── MCP ───────────────────────────────────────────────────────────────────────
@@ -126,6 +128,26 @@ export interface McpServerConfig {
 
 export interface McpConfig {
   servers: Record<string, McpServerConfig>
+}
+
+// ── Knowledge Base ───────────────────────────────────────────────────────────
+
+export interface KbMeta {
+  description: string
+  lastIndexed: string | null
+  docCount: number
+  tokenEstimate: number
+}
+
+export interface KbConfig {
+  active: string[]
+  kbs: Record<string, KbMeta>
+}
+
+export interface KbChunk {
+  file: string
+  index: number
+  text: string
 }
 
 // ── UI ────────────────────────────────────────────────────────────────────────

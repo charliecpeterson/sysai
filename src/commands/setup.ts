@@ -17,6 +17,7 @@ import { generateText } from 'ai'
 import { loadModels, addModel, removeModel, switchActive } from '../storage/models.js'
 import { loadMcpConfig } from '../storage/mcp.js'
 import { McpClientManager } from '../core/mcp-client.js'
+import { listKbs, activeKbTokenEstimate } from '../storage/kb.js'
 import { formatApiError } from '../ui/errors.js'
 import { DEFAULTS, getModelInstance } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
@@ -233,6 +234,28 @@ export async function status(): Promise<void> {
     mcpManager.closeAll()
   }
 
+  // Knowledge bases
+  const kbs = listKbs()
+  if (kbs.length > 0) {
+    process.stdout.write('\n')
+    const CAG_LIMIT = 80_000
+    const totalTokens = activeKbTokenEstimate()
+    const activeCount = kbs.filter(k => k.active).length
+
+    for (const k of kbs) {
+      const dot = k.active ? `${GREEN}■${RESET}` : `${DIM}□${RESET}`
+      const tokens = k.tokenEstimate > 0 ? formatTokensShort(k.tokenEstimate) : 'n/a'
+      const docs = `${k.docCount} doc${k.docCount === 1 ? '' : 's'}`
+      const indexed = k.lastIndexed ? '' : `  ${YELLOW}(not indexed)${RESET}`
+      process.stdout.write(`  ${dot}  ${k.name}  ${DIM}${docs}, ~${tokens} tokens${RESET}${indexed}\n`)
+    }
+
+    if (activeCount > 0) {
+      const mode = totalTokens <= CAG_LIMIT ? `${GREEN}CAG${RESET} (in-context)` : `${CYAN}search${RESET} (BM25)`
+      process.stdout.write(`  ${DIM}mode: ${RESET}${mode}  ${DIM}~${formatTokensShort(totalTokens)} tokens active${RESET}\n`)
+    }
+  }
+
   process.stdout.write('\n')
 
   const ev = (name: string, def: string) => {
@@ -329,4 +352,10 @@ export async function editInstructions(): Promise<void> {
 
   const editor = process.env.VISUAL || process.env.EDITOR || 'vi'
   spawnSync(editor, [path], { stdio: 'inherit' })
+}
+
+function formatTokensShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
 }

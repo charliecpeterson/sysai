@@ -90,6 +90,28 @@ switch (cmd) {
     process.exit(0)
   }
 
+  case 'kb': {
+    const subCmd = rest[0]
+    const { addKb, listKb, indexKbCmd, activateKb, deactivateKb, deleteKbCmd } = await import('./src/commands/kb.js')
+    if (!subCmd || subCmd === 'list') {
+      listKb()
+    } else if (subCmd === 'add') {
+      await addKb(rest.slice(1))
+    } else if (subCmd === 'index') {
+      indexKbCmd(rest[1])
+    } else if (subCmd === 'on') {
+      activateKb(rest[1])
+    } else if (subCmd === 'off') {
+      deactivateKb(rest[1])
+    } else if (subCmd === 'delete' || subCmd === 'rm') {
+      await deleteKbCmd(rest[1])
+    } else {
+      process.stderr.write(`sysai: unknown kb subcommand "${subCmd}". Try: list, add, index, on, off, delete\n`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
+
   case 'tasks': {
     const { listTasksCmd } = await import('./src/task/task.js')
     await listTasksCmd()
@@ -162,6 +184,14 @@ function printHelp(): void {
       ['mcp edit <name>',    'Edit a server\'s config in place'],
       ['mcp remove <name>',  'Remove an MCP server'],
       ['mcp test [name]',    'Connect and list tools (all servers if no name)'],
+    ]],
+    ['Knowledge Base', [
+      ['kb list',            'List knowledge bases with status and size'],
+      ['kb add <name>',      'Create a knowledge base'],
+      ['kb index <name>',    '(Re)index docs/ contents'],
+      ['kb on <name>',       'Activate a KB for AI use'],
+      ['kb off <name>',      'Deactivate a KB'],
+      ['kb delete <name>',   'Remove a KB and all its docs'],
     ]],
     ['Config', [
       ['instructions',       'Edit ~/.sysai/instructions.md (injected into every query)'],

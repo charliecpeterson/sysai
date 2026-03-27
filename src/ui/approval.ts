@@ -8,6 +8,7 @@
 import type { Interface as RLInterface } from 'readline'
 import { runAgent, parseToolArgs } from '../core/agent.js'
 import { getMcpManager } from '../core/mcp-client.js'
+import { loadActiveKbText, activeKbTokenEstimate } from '../storage/kb.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
 import { RESET, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
@@ -30,6 +31,17 @@ export function makeApproval(rl: RLInterface, {
 
     if (name === 'read_file') {
       writeFn(`${DIM}  ○ read  ${args.path ?? '?'}${RESET}\n`)
+      return 'approved'
+    }
+
+    if (name === 'search_kb') {
+      const kb = args.kb ? ` [${args.kb}]` : ''
+      writeFn(`${DIM}  ○ search${kb}  ${args.query ?? '?'}${RESET}\n`)
+      return 'approved'
+    }
+
+    if (name === 'list_kb_files') {
+      writeFn(`${DIM}  ○ list kb files${args.kb ? ` [${args.kb}]` : ''}${RESET}\n`)
       return 'approved'
     }
 
@@ -72,7 +84,7 @@ export function makeApproval(rl: RLInterface, {
     }
 
     // MCP tools — anything that isn't a built-in tool
-    const BUILTIN_TOOLS = new Set(['bash', 'read_file', 'write_file'])
+    const BUILTIN_TOOLS = new Set(['bash', 'read_file', 'write_file', 'search_kb', 'list_kb_files'])
     if (!BUILTIN_TOOLS.has(name)) {
       const argsStr = JSON.stringify(args)
       writeFn(`\n${CYAN}  ● mcp${RESET}   ${name}  ${DIM}${argsStr}${RESET}\n`)
@@ -123,9 +135,43 @@ export async function runAgentWithUI({
     }
   }
 
+  // CAG: inject active knowledge base text into system prompt
+  const CAG_TOKEN_LIMIT = 80_000
+  const kbTokens = activeKbTokenEstimate()
+  let finalSystemPrompt = systemPrompt
+  let enableKbSearch = false
+
+  if (kbTokens > 0 && kbTokens <= CAG_TOKEN_LIMIT) {
+    const kbData = loadActiveKbText()
+    if (kbData) {
+      finalSystemPrompt += `\n\n## Knowledge Base\n\nThe following knowledge base content is available for reference. Use it to answer questions when relevant.\nActive KBs: ${kbData.kbNames.join(', ')}\n\n${kbData.text}`
+      if (uiIsTTY) {
+        uiStream.write(`${DIM}  kb   ${kbData.kbNames.join(', ')} (~${formatKbTokens(kbTokens)} tokens)${RESET}\n`)
+      }
+    }
+  } else if (kbTokens > CAG_TOKEN_LIMIT) {
+    enableKbSearch = true
+    finalSystemPrompt += `\n\n## Knowledge Base (search mode)
+
+The user has active knowledge bases that are too large to fit in context. You have two tools to access them:
+
+1. **list_kb_files** — Browse what files exist. File names often reveal topics (e.g. "pricing.md", "gpu-policy.md"). Start here to orient yourself.
+2. **search_kb** — Keyword search across all KB content. Returns the most relevant chunks.
+
+**Strategy for answering KB questions:**
+- Start with list_kb_files to see what's available
+- Search with specific keywords from the user's question
+- If results seem incomplete, search again with synonyms or related terms (e.g. "price" → "cost", "purchase", "pricing")
+- When you find a promising file, use read_file with the full path to read it directly
+- Do 2-3 searches before concluding information isn't available`
+    if (uiIsTTY) {
+      uiStream.write(`${DIM}  kb   search mode (~${formatKbTokens(kbTokens)} tokens, too large for context)${RESET}\n`)
+    }
+  }
+
   try {
     const result = await runAgent({
-      systemPrompt,
+      systemPrompt: finalSystemPrompt,
       messages,
       onThinking:     () => spinner?.start(),
       onThinkingDone: () => spinner?.stop(),
@@ -149,6 +195,7 @@ export async function runAgentWithUI({
       },
       abortSignal,
       mcpManager: mcpManager ?? undefined,
+      enableKbSearch,
     })
     renderer?.flush()
     return result
@@ -156,4 +203,10 @@ export async function runAgentWithUI({
     spinner?.stop()
     renderer?.flush()
   }
+}
+
+function formatKbTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
 }

@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, statSync } from 'fs'
 import { getModel }          from './provider.js'
 import { DIM, YELLOW, RESET } from '../ui/colors.js'
 import type { AgentOptions, AgentResult } from '../types.js'
+import { searchKb, activeKbDescriptions, listKbFiles, getKbFilePath } from '../storage/kb.js'
 
 const MAX_ITERATIONS   = parseInt(process.env.SYSAI_MAX_TURNS || '20')
 const MAX_FILE_READ    = 20_000  // chars
@@ -56,16 +57,20 @@ then request specific sections based on what you find. Never assume truncated ou
  */
 export async function runAgent({
   systemPrompt, messages, onToken, onToolApproval, onToolResult,
-  onThinking, onThinkingDone, abortSignal, mcpManager,
+  onThinking, onThinkingDone, abortSignal, mcpManager, enableKbSearch,
 }: AgentOptions): Promise<AgentResult> {
   const model   = getModel()
   const history = [...messages] as ModelMessage[]
   let fullText  = ''
   let iterations = 0
 
-  // Merge built-in tools with any MCP tools for this session
+  // Build search_kb tool dynamically if KB search is enabled
+  const kbTools = enableKbSearch ? buildKbSearchTools() : {}
+
+  // Merge built-in tools with KB search and MCP tools
   const allTools = {
     ...TOOLS,
+    ...kbTools,
     ...(mcpManager ? mcpManager.getAiSdkTools() as typeof TOOLS : {}),
   }
 
@@ -239,6 +244,32 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
       }
     }
 
+    case 'search_kb': {
+      if (!args.query) return 'Error: no query provided'
+      const results = searchKb(args.query as string, {
+        limit: (args.limit as number) ?? 8,
+        kb: args.kb as string | undefined,
+      })
+      if (results.length === 0) return 'No results found. Try different keywords or use list_kb_files to browse available documents.'
+      return results.map(r => {
+        const file = r.file.replace(/.*\/kb\/[^/]+\/docs\//, '')
+        return `[${r.kb}] ${file} (score ${r.score.toFixed(2)}):\n${r.text}`
+      }).join('\n\n---\n\n')
+    }
+
+    case 'list_kb_files': {
+      const files = listKbFiles(args.kb as string | undefined)
+      if (files.length === 0) return 'No files found in active knowledge bases.'
+      const lines = files.map(f => {
+        const size = f.size < 1024 ? `${f.size}B`
+          : f.size < 1024 * 1024 ? `${(f.size / 1024).toFixed(1)}K`
+          : `${(f.size / (1024 * 1024)).toFixed(1)}M`
+        const fullPath = getKbFilePath(f.kb, f.file) ?? ''
+        return `[${f.kb}] ${f.file}  (${size})  ${fullPath}`
+      })
+      return `${files.length} files:\n${lines.join('\n')}`
+    }
+
     default:
       return `Unknown tool: ${call.toolName}`
   }
@@ -297,6 +328,42 @@ function executeBash(command: string): Promise<string> {
 
     proc.on('error', (err: Error) => { clearTimeout(timer); resolve(`Error: ${err.message}`) })
   })
+}
+
+// ── KB search tool builder ────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildKbSearchTools(): Record<string, any> {
+  const descs = activeKbDescriptions()
+  const kbList = descs.map(d => `  - ${d.name}: ${d.description}`).join('\n')
+
+  return {
+    search_kb: tool({
+      description: `Search active knowledge bases using keyword search. Returns the most relevant text chunks.
+Use this to find specific information. Try multiple searches with different keywords if the first results aren't sufficient.
+For example, if asked "how much are compute nodes", try queries like "compute node price cost", "purchasing nodes", etc.
+
+Active knowledge bases:
+${kbList}`,
+      inputSchema: z.object({
+        query: z.string().describe('Keyword search query — use specific, varied terms for best results'),
+        limit: z.number().optional().describe('Max results to return (default 8)'),
+        kb:    z.string().optional().describe('Target a specific KB by name (searches all active KBs if omitted)'),
+      }),
+    }),
+
+    list_kb_files: tool({
+      description: `List all files in active knowledge bases. Shows file names, sizes, and which KB they belong to.
+Use this to browse what documents are available before searching. File names often reveal what topics are covered.
+After spotting a relevant file, you can use read_file to read it directly (prefix path with ~/.sysai/kb/<kb-name>/docs/).
+
+Active knowledge bases:
+${kbList}`,
+      inputSchema: z.object({
+        kb: z.string().optional().describe('List files from a specific KB only (lists all active KBs if omitted)'),
+      }),
+    }),
+  }
 }
 
 // ── retry helpers ─────────────────────────────────────────────────────────────
