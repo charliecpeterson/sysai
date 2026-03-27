@@ -279,7 +279,7 @@ sysai supports local knowledge bases — drop files in a directory, index them, 
 sysai automatically picks the best strategy based on KB size:
 
 - **Small KBs** (≤80k tokens) — **CAG mode**: all content injected directly into the AI's context. The AI sees everything and can reference it naturally.
-- **Large KBs** (>80k tokens) — **Search mode**: the AI gets a `search_kb` tool and queries your KBs with BM25 keyword search. It can search multiple times with different queries to find what it needs.
+- **Large KBs** (>80k tokens) — **Search mode**: the AI gets `list_kb_files` and `search_kb` tools. It browses files, searches with BM25 keyword matching (boosted by filename relevance), and automatically expands queries with alternate phrasings to find what it needs.
 
 ### Creating a knowledge base
 
@@ -292,14 +292,19 @@ Or use the interactive wizard:
 sysai kb add
 ```
 
-This creates `~/.sysai/kb/myproject/docs/` — drop your files there:
+This creates `~/.sysai/kb/myproject/docs/` — add files to it:
 
 ```bash
+# Copy files manually
 cp ~/docs/*.md ~/.sysai/kb/myproject/docs/
 cp ~/specs/api.yaml ~/.sysai/kb/myproject/docs/
+
+# Or use add-file (copies and re-indexes automatically)
+sysai kb add-file myproject ~/docs/api.md
+sysai kb add-file myproject ~/specs/         # entire directory
 ```
 
-Then index:
+Then index (if adding manually):
 ```bash
 sysai kb index myproject
   ✓ Indexed "myproject": 12 files, ~15.2k tokens
@@ -345,13 +350,16 @@ In search mode the AI has `list_kb_files`, `search_kb`, and `read_file` — it b
 ### Managing knowledge bases
 
 ```bash
-sysai kb list              # show all KBs with status and size
-sysai kb add <name>        # create a KB
-sysai kb index <name>      # (re)index docs/ contents
-sysai kb on <name>         # activate a KB for AI use
-sysai kb off <name>        # deactivate a KB
-sysai kb delete <name>     # remove a KB and all its docs
+sysai kb list                    # show all KBs with status and size
+sysai kb add <name>              # create a KB
+sysai kb add-file <name> <path>  # copy file or directory into KB and re-index
+sysai kb index <name>            # (re)index docs/ contents
+sysai kb on <name>               # activate a KB for AI use
+sysai kb off <name>              # deactivate a KB
+sysai kb delete <name>           # remove a KB and all its docs
 ```
+
+`sysai kb list` shows a `(stale — re-index)` warning next to any KB whose docs folder has files newer than the last index run.
 
 New KBs start active. Use `sysai kb off` to keep a KB around without loading it into context. You can have multiple KBs — only active ones are used.
 
@@ -359,8 +367,9 @@ For the best experience, keep frequently-used KBs under ~80k tokens so they stay
 
 ### Embedding models (optional, improves search mode)
 
-When an active embedding is configured, `sysai kb index` generates vector embeddings at index time. Search then uses hybrid scoring (BM25 + cosine similarity) for much better results than keyword matching alone.
+Embeddings are configured per-KB at index time. When indexing, sysai prompts you to choose an embedding model (or BM25 only). If you choose an embedding model, it generates vectors and search uses hybrid scoring (BM25 + cosine similarity) for much better results.
 
+First add an embedding model:
 ```bash
 sysai setup
 # e) Add embedding
@@ -369,13 +378,18 @@ sysai setup
 #   For OpenAI: API key, model text-embedding-3-small
 ```
 
-Then re-index your KBs:
+Then index your KB — you'll be prompted to choose:
 ```bash
 sysai kb index h2docs
+  Embedding models available:
+    1) openai-small  openai  text-embedding-3-small
+    0) None (BM25 only — no API calls)
+  Choose embedding [1]: 1
+
   ✓ Indexed "h2docs": 57 files, ~375.0k tokens  embeddings: openai-small
 ```
 
-If you switch embedding models, re-index affected KBs — `sysai kb list` shows a `(stale — re-index)` warning if the indexed embeddings don't match the active model.
+Each KB stores which embedding it was indexed with. Multiple KBs can use different embedding models independently. If you remove an embedding config, affected KBs fall back to BM25-only search until re-indexed.
 
 **Popular local embedding models (via Ollama):**
 
@@ -408,7 +422,7 @@ Example setup with multiple models and an embedding:
     local-llama     llamacpp    llama3.2
 
   Embedding models:
-    openai-small    openai   text-embedding-3-small   ← active
+    openai-small    openai   text-embedding-3-small
 ```
 
 Model configs are stored in `~/.sysai/models.json` (chmod 600).
@@ -445,7 +459,7 @@ sysai status
 
   ◆  get_weather  2 tools
 
-  ◇  openai-small   openai   text-embedding-3-small   ← active
+  ◇  openai-small   openai   text-embedding-3-small
 
   ■  h2docs  57 docs, ~375k tokens  openai-small
 
@@ -559,7 +573,7 @@ sysai doctor  (task)
 | `bash` | ask user | Run any shell command. Output capped at 20k chars (start + end preserved). |
 | `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading of large files. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
-| `search_kb` | auto | BM25 keyword search over active knowledge bases. File name matches are boosted. Available in search mode (>80k tokens). |
+| `search_kb` | auto | Hybrid BM25 + cosine search over active knowledge bases. Automatically expands the query with 2 alternate phrasings and merges results. File name matches are boosted. Available in search mode (>80k tokens). |
 | `list_kb_files` | auto | List all files in active KBs with paths and sizes. Helps the AI browse before searching. Available in search mode. |
 | MCP tools | ask user | Any tool exposed by a configured MCP server, called by its original name. Auto-approved with `-y`. Result preview shown inline. |
 
@@ -597,8 +611,9 @@ Bash output over 20k chars is truncated with start + end preserved and a note to
 ├── kb/                ← knowledge bases (created on first sysai kb add)
 │   ├── config.json    ← KB metadata and active list
 │   └── <name>/
-│       ├── docs/      ← user-dropped source files
-│       └── index.json ← processed text chunks (after sysai kb index)
+│       ├── docs/       ← user-dropped source files
+│       ├── index.json  ← processed text chunks (after sysai kb index)
+│       └── vectors.json ← embeddings (optional, when embedding model chosen)
 ├── shell.bash         ← shell integration (? function)
 ├── instructions.md    ← optional: custom instructions for the AI
 ├── tasks/             ← task files (doctor.md, jobcheck.md, yours…)
@@ -628,12 +643,13 @@ sysai mcp edit <name>      — update a server's config in place
 sysai mcp remove <name>    — remove an MCP server
 sysai mcp test [name]      — connect and list tools (all servers if no name)
 
-sysai kb list              — list knowledge bases with status and size
-sysai kb add <name>        — create a knowledge base
-sysai kb index <name>      — (re)index docs/ contents
-sysai kb on <name>         — activate a KB for AI use
-sysai kb off <name>        — deactivate a KB
-sysai kb delete <name>     — remove a KB and all its docs
+sysai kb list                    — list knowledge bases with status and size
+sysai kb add <name>              — create a knowledge base
+sysai kb add-file <name> <path>  — copy file or directory into KB and re-index
+sysai kb index <name>            — (re)index docs/ contents
+sysai kb on <name>               — activate a KB for AI use
+sysai kb off <name>              — deactivate a KB
+sysai kb delete <name>           — remove a KB and all its docs
 
 sysai tasks                — list saved tasks
 sysai task new             — create a task with AI assistance
