@@ -16,7 +16,6 @@ export interface ModelConfig {
 export interface ModelsData {
   active: string | null
   models: ModelConfig[]
-  activeEmbedding?: string | null
   embeddings?: EmbeddingConfig[]
 }
 

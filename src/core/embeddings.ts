@@ -5,7 +5,6 @@
  * providers. Returns null if no active embedding is configured.
  */
 
-import { getActiveEmbeddingConfig } from '../storage/models.js'
 import type { EmbeddingConfig } from '../types.js'
 
 const BATCH_SIZE = 50
@@ -14,11 +13,11 @@ const BATCH_SIZE = 50
 const MAX_EMBED_CHARS = 24_000  // ~6k tokens, safe for all providers
 
 /**
- * Embed an array of texts using the provided or active embedding config.
+ * Embed an array of texts using the provided embedding config.
  * Returns an array of float vectors (one per input text).
  */
-export async function embedTexts(texts: string[], cfg?: EmbeddingConfig): Promise<number[][]> {
-  const config = cfg ?? getActiveEmbeddingConfig()
+export async function embedTexts(texts: string[], cfg: EmbeddingConfig): Promise<number[][]> {
+  const config = cfg
   if (!config) return []
 
   const baseUrl = config.baseUrl ?? 'https://api.openai.com/v1'
@@ -54,12 +53,12 @@ export async function embedTexts(texts: string[], cfg?: EmbeddingConfig): Promis
 }
 
 /**
- * Embed a single query string using the active embedding config.
- * Returns null if no active embedding or on error.
+ * Embed a single string using the provided config.
+ * Returns null on error.
  */
-export async function embedQuery(query: string): Promise<number[] | null> {
+export async function embedOne(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
   try {
-    const vecs = await embedTexts([query])
+    const vecs = await embedTexts([text], cfg)
     return vecs[0] ?? null
   } catch {
     return null

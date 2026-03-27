@@ -11,6 +11,7 @@
 
 import { createInterface } from 'readline'
 import { createKb, deleteKb, setKbActive, listKbs, indexKb } from '../storage/kb.js'
+import { listEmbeddings } from '../storage/models.js'
 import { RESET, BOLD, DIM, RED, GREEN, CYAN, YELLOW } from '../ui/colors.js'
 
 export async function addKb(args: string[]): Promise<void> {
@@ -69,8 +70,7 @@ export async function listKb(): Promise<void> {
   process.stdout.write(`  ${DIM}${'NAME'.padEnd(maxName)}  DOCS  TOKENS    STATUS         EMBEDDING${RESET}\n`)
   process.stdout.write(`  ${DIM}${'-'.repeat(maxName + 55)}${RESET}\n`)
 
-  const { getActiveEmbeddingConfig } = await import('../storage/models.js')
-  const activeCfg = getActiveEmbeddingConfig()
+  const { getEmbeddingConfig } = await import('../storage/models.js')
 
   for (const k of kbs) {
     const status  = k.active ? `${GREEN}● active${RESET}  ` : `${DIM}○ inactive${RESET}`
@@ -80,11 +80,10 @@ export async function listKb(): Promise<void> {
 
     let embNote = `${DIM}none${RESET}`
     if (k.embeddingModel) {
-      if (activeCfg && k.embeddingModel !== activeCfg.name) {
-        embNote = `${YELLOW}${k.embeddingModel} (stale — re-index)${RESET}`
-      } else {
-        embNote = `${GREEN}${k.embeddingModel}${RESET}`
-      }
+      const cfg = getEmbeddingConfig(k.embeddingModel)
+      embNote = cfg
+        ? `${GREEN}${k.embeddingModel}${RESET}`
+        : `${YELLOW}${k.embeddingModel} (config removed — re-index)${RESET}`
     }
 
     process.stdout.write(`  ${BOLD}${k.name.padEnd(maxName)}${RESET}  ${docs}  ${tokens}  ${status}  ${embNote}${indexed}\n`)
@@ -98,11 +97,44 @@ export async function indexKbCmd(name?: string): Promise<void> {
     process.exit(1)
   }
 
+  // Prompt for embedding choice if embeddings are configured
+  const embeddings = listEmbeddings()
+  let embeddingName: string | null = null
+
+  if (embeddings.length === 1) {
+    // Auto-use the only configured embedding
+    embeddingName = embeddings[0].name
+    process.stdout.write(`${DIM}  using embedding: ${embeddingName}${RESET}\n`)
+  } else if (embeddings.length > 1) {
+    const rl  = createInterface({ input: process.stdin, output: process.stdout })
+    const ask = (q: string) => new Promise<string>(resolve => rl.question(q, resolve))
+
+    process.stdout.write(`\n  Embedding models available:\n`)
+    embeddings.forEach((e, i) =>
+      process.stdout.write(`    ${i + 1}) ${BOLD}${e.name}${RESET}  ${DIM}${e.provider}  ${e.model}${RESET}\n`)
+    )
+    process.stdout.write(`    0) None (BM25 only)\n\n`)
+
+    const choice = (await ask('  Choose embedding [1]: ')).trim()
+    rl.close()
+    process.stdout.write('\n')
+
+    if (choice === '0') {
+      embeddingName = null
+    } else {
+      const idx = choice === '' ? 0 : parseInt(choice) - 1
+      embeddingName = embeddings[idx]?.name ?? null
+    }
+  }
+
   process.stdout.write(`${DIM}  indexing "${name}"...${RESET}`)
 
   try {
-    const { docCount, tokenEstimate, embeddingModel } = await indexKb(name, (msg) => {
-      process.stdout.write(`\r${DIM}  ${msg}${RESET}                    `)
+    const { docCount, tokenEstimate, embeddingModel } = await indexKb(name, {
+      embeddingName,
+      onProgress: (msg) => {
+        process.stdout.write(`\r${DIM}  ${msg}${RESET}                    `)
+      },
     })
     const embNote = embeddingModel ? `  ${DIM}embeddings: ${embeddingModel}${RESET}` : ''
     process.stdout.write(`\r${GREEN}  ✓ Indexed "${name}": ${docCount} file${docCount === 1 ? '' : 's'}, ~${formatTokens(tokenEstimate)} tokens${RESET}${embNote}\n`)

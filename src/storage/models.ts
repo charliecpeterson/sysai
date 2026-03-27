@@ -61,10 +61,15 @@ export function removeModel(name: string): void {
 
 // ── Embedding config ─────────────────────────────────────────────────────────
 
-export function getActiveEmbeddingConfig(): EmbeddingConfig | null {
+/** Get a specific embedding config by name. */
+export function getEmbeddingConfig(name: string): EmbeddingConfig | null {
   const data = loadModels()
-  if (!data?.embeddings?.length) return null
-  return data.embeddings.find(e => e.name === data.activeEmbedding) ?? null
+  return data?.embeddings?.find(e => e.name === name) ?? null
+}
+
+/** List all configured embeddings. */
+export function listEmbeddings(): EmbeddingConfig[] {
+  return loadModels()?.embeddings ?? []
 }
 
 export function addEmbedding(cfg: EmbeddingConfig): void {
@@ -73,7 +78,6 @@ export function addEmbedding(cfg: EmbeddingConfig): void {
   const idx = data.embeddings.findIndex(e => e.name === cfg.name)
   if (idx >= 0) data.embeddings[idx] = cfg
   else data.embeddings.push(cfg)
-  if (!data.activeEmbedding) data.activeEmbedding = cfg.name
   saveModels(data)
 }
 
@@ -81,17 +85,5 @@ export function removeEmbedding(name: string): void {
   const data = loadModels()
   if (!data?.embeddings) return
   data.embeddings = data.embeddings.filter(e => e.name !== name)
-  if (data.activeEmbedding === name) {
-    data.activeEmbedding = data.embeddings[0]?.name ?? null
-  }
-  saveModels(data)
-}
-
-export function switchActiveEmbedding(name: string): void {
-  const data = loadModels()
-  if (!data?.embeddings?.length) throw new Error('No embeddings configured. Run: sysai setup')
-  if (!data.embeddings.find(e => e.name === name))
-    throw new Error(`No embedding named "${name}".`)
-  data.activeEmbedding = name
   saveModels(data)
 }

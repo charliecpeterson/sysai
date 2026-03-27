@@ -12,7 +12,7 @@ import { execSync } from 'child_process'
 import { homedir } from 'os'
 import { join, extname } from 'path'
 import type { KbConfig, KbMeta, KbChunk } from '../types.js'
-import { getActiveEmbeddingConfig } from './models.js'
+import { getEmbeddingConfig } from './models.js'
 import { embedTexts } from '../core/embeddings.js'
 
 const KB_DIR     = join(homedir(), '.sysai', 'kb')
@@ -91,8 +91,9 @@ export function listKbs(): Array<{ name: string; active: boolean } & KbMeta> {
  */
 export async function indexKb(
   name: string,
-  onProgress?: (msg: string) => void,
+  opts: { embeddingName?: string | null; onProgress?: (msg: string) => void } = {},
 ): Promise<{ docCount: number; tokenEstimate: number; embeddingModel: string | null }> {
+  const { embeddingName, onProgress } = opts
   const config = loadKbConfig()
   if (!config.kbs[name]) throw new Error(`KB "${name}" not found`)
 
@@ -119,12 +120,14 @@ export async function indexKb(
   const totalChars    = chunks.reduce((sum, c) => sum + c.text.length, 0)
   const tokenEstimate = Math.ceil(totalChars / CHARS_PER_TOKEN)
 
-  // Generate embeddings if an active embedding is configured
+  // Generate embeddings if an embedding was requested
   let embeddingModel: string | null = null
   let embeddingDimensions: number | null = null
-  const embCfg = getActiveEmbeddingConfig()
+  const embCfg = embeddingName ? getEmbeddingConfig(embeddingName) : null
 
-  if (embCfg && chunks.length > 0) {
+  if (embeddingName && !embCfg) {
+    onProgress?.(`embedding config "${embeddingName}" not found — using BM25 only`)
+  } else if (embCfg && chunks.length > 0) {
     onProgress?.(`embedding ${chunks.length} chunks with ${embCfg.name}...`)
     try {
       const vectors = await embedTexts(chunks.map(c => c.text), embCfg)
@@ -137,7 +140,7 @@ export async function indexKb(
       onProgress?.(`embedding failed: ${(err as Error).message} — using BM25 only`)
     }
   } else if (!embCfg && existsSync(vectorPath)) {
-    // No active embedding — remove stale vectors
+    // No embedding requested — remove stale vectors
     rmSync(vectorPath)
   }
 
@@ -332,12 +335,9 @@ export async function searchKb(
 
   scored.sort((a, b) => b.score - a.score)
 
-  // Hybrid: try to load vectors and embed the query
-  const activeCfg = getActiveEmbeddingConfig()
+  // Hybrid: try to load vectors for each KB using its own embedding config
   let finalScored = scored
-
-  if (activeCfg) {
-    // Attempt to load vectors for each target KB and blend with BM25
+  {
     const vectorsByKb = new Map<string, number[][]>()
     let anyVectorsLoaded = false
 
@@ -345,10 +345,11 @@ export async function searchKb(
       const kbMeta = config.kbs[kbName]
       const vectorPath = join(KB_DIR, kbName, 'vectors.json')
 
-      if (!existsSync(vectorPath)) continue
+      if (!existsSync(vectorPath) || !kbMeta?.embeddingModel) continue
 
-      if (kbMeta?.embeddingModel && kbMeta.embeddingModel !== activeCfg.name) {
-        opts.onWarn?.(`kb "${kbName}": embeddings were indexed with "${kbMeta.embeddingModel}" but active embedding is "${activeCfg.name}" — run sysai kb index ${kbName} to re-embed`)
+      const embCfg = getEmbeddingConfig(kbMeta.embeddingModel)
+      if (!embCfg) {
+        opts.onWarn?.(`kb "${kbName}": embedding config "${kbMeta.embeddingModel}" no longer exists — using BM25 only. Re-run: sysai kb index ${kbName}`)
         continue
       }
 
@@ -381,25 +382,51 @@ export async function searchKb(
         if (counter < vecs.length) chunkVecIndex.set(i, vecs[counter])
       }
 
-      // Embed the query
+      // Embed the query — once per distinct embedding model used across KBs
       try {
-        const { embedQuery, cosineSimilarity } = await import('../core/embeddings.js')
-        const queryVec = await embedQuery(query)
+        const { embedTexts: _embedTexts, cosineSimilarity } = await import('../core/embeddings.js')
 
-        if (queryVec) {
-          // Normalize BM25 scores to 0-1
+        // Find distinct embedding configs for the loaded KBs
+        const embConfigsByName = new Map<string, import('../types.js').EmbeddingConfig>()
+        for (const kbName of vectorsByKb.keys()) {
+          const embName = config.kbs[kbName]?.embeddingModel
+          if (embName && !embConfigsByName.has(embName)) {
+            const cfg = getEmbeddingConfig(embName)
+            if (cfg) embConfigsByName.set(embName, cfg)
+          }
+        }
+
+        // Embed query with each distinct config
+        const queryVecByModel = new Map<string, number[]>()
+        for (const [embName, embCfg] of embConfigsByName) {
+          try {
+            const vecs = await _embedTexts([query], embCfg)
+            if (vecs[0]) queryVecByModel.set(embName, vecs[0])
+          } catch {}
+        }
+
+        if (queryVecByModel.size > 0) {
+          // Build KB → embedding model map for fast lookup
+          const kbEmbModel = new Map<string, string>()
+          for (const kbName of vectorsByKb.keys()) {
+            const embName = config.kbs[kbName]?.embeddingModel
+            if (embName) kbEmbModel.set(kbName, embName)
+          }
+
           const maxBm25 = scored.length > 0 ? scored[0].score : 1
-          const BM25_WEIGHT    = 0.4
-          const COSINE_WEIGHT  = 0.6
+          const BM25_WEIGHT   = 0.4
+          const COSINE_WEIGHT = 0.6
 
-          // Score all chunks with hybrid
           const hybridScored: Array<{ idx: number; score: number }> = []
           for (let i = 0; i < N; i++) {
-            const bm25Raw   = scored.find(s => s.idx === i)?.score ?? 0
-            const bm25Norm  = maxBm25 > 0 ? bm25Raw / maxBm25 : 0
-            const vec       = chunkVecIndex.get(i)
-            const cosine    = vec ? cosineSimilarity(queryVec, vec) : 0
-            const hybrid    = BM25_WEIGHT * bm25Norm + COSINE_WEIGHT * cosine
+            const chunk    = allChunks[i]
+            const embModel = kbEmbModel.get(chunk.kb)
+            const queryVec = embModel ? queryVecByModel.get(embModel) : undefined
+            const vec      = chunkVecIndex.get(i)
+            const cosine   = (queryVec && vec) ? cosineSimilarity(queryVec, vec) : 0
+            const bm25Raw  = scored.find(s => s.idx === i)?.score ?? 0
+            const bm25Norm = maxBm25 > 0 ? bm25Raw / maxBm25 : 0
+            const hybrid   = BM25_WEIGHT * bm25Norm + COSINE_WEIGHT * cosine
             if (hybrid > 0.01) hybridScored.push({ idx: i, score: hybrid })
           }
 
