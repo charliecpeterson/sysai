@@ -101,11 +101,7 @@ export async function indexKbCmd(name?: string): Promise<void> {
   const embeddings = listEmbeddings()
   let embeddingName: string | null = null
 
-  if (embeddings.length === 1) {
-    // Auto-use the only configured embedding
-    embeddingName = embeddings[0].name
-    process.stdout.write(`${DIM}  using embedding: ${embeddingName}${RESET}\n`)
-  } else if (embeddings.length > 1) {
+  if (embeddings.length > 0) {
     const rl  = createInterface({ input: process.stdin, output: process.stdout })
     const ask = (q: string) => new Promise<string>(resolve => rl.question(q, resolve))
 
@@ -113,9 +109,10 @@ export async function indexKbCmd(name?: string): Promise<void> {
     embeddings.forEach((e, i) =>
       process.stdout.write(`    ${i + 1}) ${BOLD}${e.name}${RESET}  ${DIM}${e.provider}  ${e.model}${RESET}\n`)
     )
-    process.stdout.write(`    0) None (BM25 only)\n\n`)
+    process.stdout.write(`    0) None ${DIM}(BM25 only — no API calls)${RESET}\n\n`)
 
-    const choice = (await ask('  Choose embedding [1]: ')).trim()
+    const defaultChoice = embeddings.length === 1 ? '1' : '1'
+    const choice = (await ask(`  Choose embedding [${defaultChoice}]: `)).trim()
     rl.close()
     process.stdout.write('\n')
 
