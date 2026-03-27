@@ -2,6 +2,7 @@
  * kb.ts — knowledge base management commands
  *
  * sysai kb add <name> --desc "..."   create a KB (active by default)
+ * sysai kb add-file <name> <path>    copy file/dir into KB and re-index
  * sysai kb list                      show all KBs with status/size
  * sysai kb index <name>              (re)index docs/ contents
  * sysai kb on <name>                 activate a KB
@@ -10,7 +11,10 @@
  */
 
 import { createInterface } from 'readline'
-import { createKb, deleteKb, setKbActive, listKbs, indexKb } from '../storage/kb.js'
+import { existsSync, statSync, mkdirSync, copyFileSync, readdirSync } from 'fs'
+import { join, basename } from 'path'
+import { homedir } from 'os'
+import { createKb, deleteKb, setKbActive, listKbs, indexKb, loadKbConfig, isKbStale } from '../storage/kb.js'
 import { listEmbeddings } from '../storage/models.js'
 import { RESET, BOLD, DIM, RED, GREEN, CYAN, YELLOW } from '../ui/colors.js'
 
@@ -55,6 +59,70 @@ export async function addKb(args: string[]): Promise<void> {
   process.stdout.write(`  Then run: ${CYAN}sysai kb index ${name}${RESET}\n\n`)
 }
 
+export async function addFileCmd(kbName?: string, srcPath?: string): Promise<void> {
+  if (!kbName) {
+    process.stderr.write(`${RED}sysai: specify a KB name. Run: sysai kb list${RESET}\n`)
+    process.exit(1)
+  }
+  if (!srcPath) {
+    process.stderr.write(`${RED}sysai: specify a file or directory path${RESET}\n`)
+    process.exit(1)
+  }
+
+  // Resolve ~ in path
+  const resolved = srcPath.startsWith('~/')
+    ? join(homedir(), srcPath.slice(2))
+    : srcPath
+
+  if (!existsSync(resolved)) {
+    process.stderr.write(`${RED}sysai: path not found: ${srcPath}${RESET}\n`)
+    process.exit(1)
+  }
+
+  // Verify KB exists
+  const config = loadKbConfig()
+  if (!config.kbs[kbName]) {
+    process.stderr.write(`${RED}sysai: KB "${kbName}" not found. Run: sysai kb list${RESET}\n`)
+    process.exit(1)
+  }
+
+  const docsDir = join(homedir(), '.sysai', 'kb', kbName, 'docs')
+  mkdirSync(docsDir, { recursive: true })
+
+  const stat = statSync(resolved)
+  let copied = 0
+
+  if (stat.isDirectory()) {
+    copied = copyDir(resolved, join(docsDir, basename(resolved)))
+    process.stdout.write(`${GREEN}  ✓ Copied directory "${basename(resolved)}" (${copied} file${copied === 1 ? '' : 's'}) into ${kbName}${RESET}\n`)
+  } else {
+    const dest = join(docsDir, basename(resolved))
+    copyFileSync(resolved, dest)
+    copied = 1
+    process.stdout.write(`${GREEN}  ✓ Copied "${basename(resolved)}" into ${kbName}${RESET}\n`)
+  }
+
+  // Auto-index
+  await indexKbCmd(kbName)
+}
+
+function copyDir(src: string, dest: string): number {
+  mkdirSync(dest, { recursive: true })
+  let count = 0
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue
+    const srcFull  = join(src, entry.name)
+    const destFull = join(dest, entry.name)
+    if (entry.isDirectory()) {
+      count += copyDir(srcFull, destFull)
+    } else {
+      copyFileSync(srcFull, destFull)
+      count++
+    }
+  }
+  return count
+}
+
 export async function listKb(): Promise<void> {
   const kbs = listKbs()
 
@@ -76,7 +144,8 @@ export async function listKb(): Promise<void> {
     const status  = k.active ? `${GREEN}● active${RESET}  ` : `${DIM}○ inactive${RESET}`
     const docs    = String(k.docCount).padStart(4)
     const tokens  = k.tokenEstimate > 0 ? formatTokens(k.tokenEstimate).padStart(8) : `${DIM}     n/a${RESET}`
-    const indexed = k.lastIndexed ? '' : `  ${YELLOW}(not indexed)${RESET}`
+    const stale   = k.lastIndexed && isKbStale(k.name)
+    const indexed = !k.lastIndexed ? `  ${YELLOW}(not indexed)${RESET}` : stale ? `  ${YELLOW}(stale — re-index)${RESET}` : ''
 
     let embNote = `${DIM}none${RESET}`
     if (k.embeddingModel) {

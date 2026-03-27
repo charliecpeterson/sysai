@@ -17,7 +17,7 @@ import { generateText } from 'ai'
 import { loadModels, addModel, removeModel, switchActive, addEmbedding, removeEmbedding } from '../storage/models.js'
 import { loadMcpConfig } from '../storage/mcp.js'
 import { McpClientManager } from '../core/mcp-client.js'
-import { listKbs, activeKbTokenEstimate } from '../storage/kb.js'
+import { listKbs, activeKbTokenEstimate, isKbStale } from '../storage/kb.js'
 import { formatApiError } from '../ui/errors.js'
 import { DEFAULTS, getModelInstance } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
@@ -357,7 +357,8 @@ export async function status(): Promise<void> {
       const dot = k.active ? `${GREEN}■${RESET}` : `${DIM}□${RESET}`
       const tokens = k.tokenEstimate > 0 ? formatTokensShort(k.tokenEstimate) : 'n/a'
       const docs = `${k.docCount} doc${k.docCount === 1 ? '' : 's'}`
-      const indexed = k.lastIndexed ? '' : `  ${YELLOW}(not indexed)${RESET}`
+      const stale   = k.lastIndexed && isKbStale(k.name)
+      const indexed = !k.lastIndexed ? `  ${YELLOW}(not indexed)${RESET}` : stale ? `  ${YELLOW}(stale)${RESET}` : ''
       let embNote = ''
       if (k.embeddingModel) {
         const cfg = getEmb2(k.embeddingModel)

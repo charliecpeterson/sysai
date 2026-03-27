@@ -228,6 +228,37 @@ export function getKbFilePath(kbName: string, relPath: string): string | null {
 }
 
 /**
+ * Check if a KB's docs have changed since it was last indexed.
+ * Returns true if any file in docs/ is newer than lastIndexed.
+ */
+export function isKbStale(name: string): boolean {
+  const config = loadKbConfig()
+  const meta = config.kbs[name]
+  if (!meta?.lastIndexed) return false  // never indexed — not "stale", just unindexed
+
+  const lastIndexedMs = new Date(meta.lastIndexed).getTime()
+  const docsDir = join(KB_DIR, name, 'docs')
+  if (!existsSync(docsDir)) return false
+
+  return checkNewerFiles(docsDir, lastIndexedMs)
+}
+
+function checkNewerFiles(dir: string, sinceMs: number): boolean {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (checkNewerFiles(full, sinceMs)) return true
+    } else {
+      try {
+        if (statSync(full).mtimeMs > sinceMs) return true
+      } catch {}
+    }
+  }
+  return false
+}
+
+/**
  * Get descriptions of active KBs (for search tool help text).
  */
 export function activeKbDescriptions(): Array<{ name: string; description: string }> {

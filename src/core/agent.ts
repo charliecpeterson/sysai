@@ -5,7 +5,7 @@
  * Works with any provider (Anthropic, OpenAI, llama.cpp) via provider.ts
  */
 
-import { streamText, tool } from 'ai'
+import { streamText, generateText, tool } from 'ai'
 import type { ModelMessage } from 'ai'
 import { z }                 from 'zod'
 import { spawn }             from 'child_process'
@@ -246,12 +246,43 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
 
     case 'search_kb': {
       if (!args.query) return 'Error: no query provided'
-      const results = await searchKb(args.query as string, {
-        limit: (args.limit as number) ?? 8,
-        kb: args.kb as string | undefined,
-      })
-      if (results.length === 0) return 'No results found. Try different keywords or use list_kb_files to browse available documents.'
-      return results.map(r => {
+      const originalQuery = args.query as string
+      const limit = (args.limit as number) ?? 8
+      const kbFilter = args.kb as string | undefined
+
+      // Query expansion: generate 2 alternative phrasings silently
+      const expandedQueries = [originalQuery]
+      try {
+        const model = getModel()
+        const { text } = await generateText({
+          model,
+          prompt: `Given this search query for a knowledge base, write 2 alternative phrasings that might find different relevant results. Return only the 2 alternatives, one per line, no numbering or explanation.\n\nQuery: ${originalQuery}`,
+          maxOutputTokens: 60,
+        })
+        const alts = text.trim().split('\n').map(l => l.trim()).filter(Boolean).slice(0, 2)
+        expandedQueries.push(...alts)
+      } catch {
+        // silently fall back to original query only
+      }
+
+      // Search all queries and merge by best score per chunk
+      const seen = new Map<string, { score: number; r: Awaited<ReturnType<typeof searchKb>>[0] }>()
+      for (const q of expandedQueries) {
+        const results = await searchKb(q, { limit, kb: kbFilter })
+        for (const r of results) {
+          const key = `${r.kb}::${r.file}::${r.text.slice(0, 80)}`
+          const existing = seen.get(key)
+          if (!existing || r.score > existing.score) seen.set(key, { score: r.score, r })
+        }
+      }
+
+      const merged = [...seen.values()]
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map(({ r }) => r)
+
+      if (merged.length === 0) return 'No results found. Try different keywords or use list_kb_files to browse available documents.'
+      return merged.map(r => {
         const file = r.file.replace(/.*\/kb\/[^/]+\/docs\//, '')
         return `[${r.kb}] ${file} (score ${r.score.toFixed(2)}):\n${r.text}`
       }).join('\n\n---\n\n')

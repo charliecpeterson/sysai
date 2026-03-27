@@ -92,7 +92,7 @@ switch (cmd) {
 
   case 'kb': {
     const subCmd = rest[0]
-    const { addKb, listKb, indexKbCmd, activateKb, deactivateKb, deleteKbCmd } = await import('./src/commands/kb.js')
+    const { addKb, listKb, indexKbCmd, activateKb, deactivateKb, deleteKbCmd, addFileCmd } = await import('./src/commands/kb.js')
     if (!subCmd || subCmd === 'list') {
       await listKb()
     } else if (subCmd === 'add') {
@@ -103,10 +103,12 @@ switch (cmd) {
       activateKb(rest[1])
     } else if (subCmd === 'off') {
       deactivateKb(rest[1])
+    } else if (subCmd === 'add-file') {
+      await addFileCmd(rest[1], rest[2])
     } else if (subCmd === 'delete' || subCmd === 'rm') {
       await deleteKbCmd(rest[1])
     } else {
-      process.stderr.write(`sysai: unknown kb subcommand "${subCmd}". Try: list, add, index, on, off, delete\n`)
+      process.stderr.write(`sysai: unknown kb subcommand "${subCmd}". Try: list, add, add-file, index, on, off, delete\n`)
       process.exit(1)
     }
     process.exit(0)
@@ -186,12 +188,13 @@ function printHelp(): void {
       ['mcp test [name]',    'Connect and list tools (all servers if no name)'],
     ]],
     ['Knowledge Base', [
-      ['kb list',            'List knowledge bases with status and size'],
-      ['kb add <name>',      'Create a knowledge base'],
-      ['kb index <name>',    '(Re)index docs/ contents'],
-      ['kb on <name>',       'Activate a KB for AI use'],
-      ['kb off <name>',      'Deactivate a KB'],
-      ['kb delete <name>',   'Remove a KB and all its docs'],
+      ['kb list',                   'List knowledge bases with status and size'],
+      ['kb add <name>',             'Create a knowledge base'],
+      ['kb add-file <name> <path>', 'Copy file or directory into KB and re-index'],
+      ['kb index <name>',           '(Re)index docs/ contents'],
+      ['kb on <name>',              'Activate a KB for AI use'],
+      ['kb off <name>',             'Deactivate a KB'],
+      ['kb delete <name>',          'Remove a KB and all its docs'],
     ]],
     ['Config', [
       ['instructions',       'Edit ~/.sysai/instructions.md (injected into every query)'],

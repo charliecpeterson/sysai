@@ -8,7 +8,7 @@
 import type { Interface as RLInterface } from 'readline'
 import { runAgent, parseToolArgs } from '../core/agent.js'
 import { getMcpManager } from '../core/mcp-client.js'
-import { loadActiveKbText, activeKbTokenEstimate } from '../storage/kb.js'
+import { loadActiveKbText, activeKbTokenEstimate, listKbs, isKbStale } from '../storage/kb.js'
 import { createSpinner, StreamRenderer, renderWriteDiff } from './render.js'
 import { RESET, DIM, RED, GREEN, YELLOW, CYAN } from './colors.js'
 import type { AgentResult, ApprovalOptions, RunAgentWithUIOptions, ToolDecision } from '../types.js'
@@ -140,6 +140,14 @@ export async function runAgentWithUI({
   const kbTokens = activeKbTokenEstimate()
   let finalSystemPrompt = systemPrompt
   let enableKbSearch = false
+
+  // Stale warning: any active KB with files newer than lastIndexed
+  if (uiIsTTY && kbTokens > 0) {
+    const staleKbs = listKbs().filter(k => k.active && isKbStale(k.name))
+    for (const k of staleKbs) {
+      uiStream.write(`${YELLOW}  ⚠ kb  "${k.name}" has new files — run: sysai kb index ${k.name}${RESET}\n`)
+    }
+  }
 
   if (kbTokens > 0 && kbTokens <= CAG_TOKEN_LIMIT) {
     const kbData = loadActiveKbText()
