@@ -394,7 +394,19 @@ export async function status(): Promise<void> {
     }
 
     if (activeCount > 0) {
-      const mode = totalTokens <= CAG_LIMIT ? `${GREEN}CAG${RESET} (in-context)` : `${CYAN}search${RESET} (BM25)`
+      let mode: string
+      if (totalTokens <= CAG_LIMIT) {
+        mode = `${GREEN}CAG${RESET} (in-context)`
+      } else {
+        // Check if any active KB has vectors indexed with the current embedding
+        const activeEmbName = data?.activeEmbedding ?? null
+        const hasHybrid = activeEmbName && kbs.some(k =>
+          k.active && k.embeddingModel && k.embeddingModel === activeEmbName
+        )
+        mode = hasHybrid
+          ? `${CYAN}search${RESET} (hybrid BM25+vectors)`
+          : `${CYAN}search${RESET} (BM25)`
+      }
       process.stdout.write(`  ${DIM}mode: ${RESET}${mode}  ${DIM}~${formatTokensShort(totalTokens)} tokens active${RESET}\n`)
     }
   }

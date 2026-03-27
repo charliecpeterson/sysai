@@ -9,6 +9,9 @@ import { getActiveEmbeddingConfig } from '../storage/models.js'
 import type { EmbeddingConfig } from '../types.js'
 
 const BATCH_SIZE = 50
+// OpenAI text-embedding-3 limit is 8192 tokens (~32k chars).
+// Truncate conservatively to avoid hitting the limit.
+const MAX_EMBED_CHARS = 24_000  // ~6k tokens, safe for all providers
 
 /**
  * Embed an array of texts using the provided or active embedding config.
@@ -27,7 +30,9 @@ export async function embedTexts(texts: string[], cfg?: EmbeddingConfig): Promis
   const results: number[][] = []
 
   for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-    const batch = texts.slice(i, i + BATCH_SIZE)
+    const batch = texts.slice(i, i + BATCH_SIZE).map(t =>
+      t.length > MAX_EMBED_CHARS ? t.slice(0, MAX_EMBED_CHARS) : t
+    )
     const res = await fetch(url, {
       method: 'POST',
       headers,
