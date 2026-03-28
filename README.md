@@ -7,13 +7,15 @@ Works everywhere your shell does: SSH sessions, HPC clusters, containers, remote
 ## Quick start
 
 ```bash
-git clone https://github.com/charliecpeterson/sysai && cd sysai && bun run main.ts install
+curl -fsSL https://raw.githubusercontent.com/charliecpeterson/sysai/main/install.sh | bash
 ```
 
 Then reload your shell:
 ```bash
 source ~/.bashrc   # or ~/.zshrc
 ```
+
+> **From source:** `git clone https://github.com/charliecpeterson/sysai && cd sysai && bun run main.ts install`
 
 Then:
 ```bash
@@ -613,6 +615,16 @@ The AI reads large files in chunks using `read_file` with `offset` and `limit`. 
 Bash output over 20k chars is truncated with start + end preserved and a note to use `grep`/`tail`/`awk` for targeted follow-up.
 
 ## Installation
+
+### One-liner
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/charliecpeterson/sysai/main/install.sh | bash
+```
+
+Detects your OS and architecture, downloads the right prebuilt binary from the [latest GitHub release](https://github.com/charliecpeterson/sysai/releases/latest), verifies the SHA256 checksum, and runs `sysai install` to set everything up.
+
+Supports: macOS (Apple Silicon + Intel), Linux (x64 + arm64).
 
 ### What gets installed
 
