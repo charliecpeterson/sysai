@@ -15,7 +15,7 @@ Then reload your shell:
 source ~/.bashrc   # or ~/.zshrc
 ```
 
-> **From source:** `git clone https://github.com/charliecpeterson/sysai && cd sysai && bun run main.ts install`
+See [USER_GUIDE.md](USER_GUIDE.md) for installing from source and full documentation.
 
 ## Basic usage
 

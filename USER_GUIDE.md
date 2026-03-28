@@ -10,7 +10,6 @@
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
 - [Installation](#installation)
-- [Building from source](#building-from-source)
 - [Project structure](#project-structure)
 - [Requirements](#requirements)
 
@@ -543,7 +542,7 @@ Use `/status` to see current token usage and decide when to compact.
 
 ## Installation
 
-### One-liner
+### Prebuilt binary (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/charliecpeterson/sysai/main/install.sh | bash
@@ -552,6 +551,28 @@ curl -fsSL https://raw.githubusercontent.com/charliecpeterson/sysai/main/install
 Detects your OS and architecture, downloads the right prebuilt binary from the [latest GitHub release](https://github.com/charliecpeterson/sysai/releases/latest), verifies the SHA256 checksum, and runs `sysai install` to set everything up.
 
 Supports: macOS (Apple Silicon + Intel), Linux (x64 + arm64).
+
+### From source
+
+Requires [bun](https://bun.sh).
+
+```bash
+git clone https://github.com/charliecpeterson/sysai
+cd sysai
+npm install
+npm run build:local    # compile for current platform
+bun run main.ts install
+```
+
+To run directly without building:
+```bash
+bun run main.ts install   # sets up ~/.sysai and symlinks main.ts as the binary
+```
+
+To cross-compile all targets:
+```bash
+npm run build    # outputs to dist/sysai-{darwin,linux}-{x64,arm64}
+```
 
 ### What gets installed
 
@@ -619,27 +640,6 @@ sysai --version            — print version
 ```bash
 rm -rf ~/.sysai
 # Remove the source line from ~/.bashrc or ~/.zshrc
-```
-
----
-
-## Building from source
-
-Requires [bun](https://bun.sh).
-
-```bash
-npm install
-npm run build          # cross-compile all 4 targets
-npm run build:local    # compile for current platform only
-```
-
-Outputs self-contained binaries to `dist/sysai-{darwin,linux}-{x64,arm64}`.
-
-To run directly from source without building:
-
-```bash
-bun run main.ts --version
-bun run main.ts install
 ```
 
 ---
