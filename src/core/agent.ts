@@ -189,6 +189,13 @@ export async function runAgent({
           ? await mcpManager.callTool(call.toolName, parseToolArgs(finalCall.input ?? (finalCall as unknown as Record<string,unknown>).args))
           : await executeTool(finalCall as typeof call)
         onToolResult?.(finalCall, resultContent, Date.now() - t0)
+
+        // If a bash command failed, append a directive so the AI retries rather
+        // than stopping to explain the error. The [exit N] marker is easy to miss
+        // at the end of long output without this nudge.
+        if (call.toolName === 'bash' && /\[exit [^0]\d*\] \(command failed\)|\[killed:/.test(resultContent)) {
+          resultContent += '\n\n[Command failed — diagnose the error above and try a corrected approach. Do not give up after one failure.]'
+        }
       }
 
       toolResultParts.push({
@@ -598,7 +605,7 @@ function executeBash(command: string): Promise<string> {
       clearTimeout(timer)
       const tail = killed
         ? `\n[killed: exceeded ${BASH_TIMEOUT_MS / 1000}s timeout]`
-        : (code !== 0 ? `\n[exit ${code}]` : '')
+        : (code !== 0 ? `\n[exit ${code}] (command failed)` : '')
       const full = (output + tail).trim() || '(no output)'
 
       if (process.stdout.isTTY) {
