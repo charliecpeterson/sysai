@@ -50,6 +50,16 @@ then request specific sections based on what you find. Never assume truncated ou
       content: z.string().describe('Content to write'),
     }),
   }),
+
+  fetch_url: tool({
+    description: `Fetch a URL and return its content as plain text.
+Strips HTML tags, scripts, and styles — returns readable text.
+Use for: documentation pages, API references, man pages, GitHub raw files, any web content.
+For raw files (JSON, YAML, plain text), content is returned as-is.`,
+    inputSchema: z.object({
+      url: z.string().describe('URL to fetch'),
+    }),
+  }),
 }
 
 /**
@@ -244,6 +254,11 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
       }
     }
 
+    case 'fetch_url': {
+      if (!args.url) return 'Error: no URL provided'
+      return fetchUrl(args.url as string)
+    }
+
     case 'search_kb': {
       if (!args.query) return 'Error: no query provided'
       const originalQuery = args.query as string
@@ -304,6 +319,76 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
     default:
       return `Unknown tool: ${call.toolName}`
   }
+}
+
+const MAX_FETCH_CHARS = 50_000  // ~12k tokens — enough for most docs pages
+
+async function fetchUrl(url: string): Promise<string> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: { 'User-Agent': 'sysai/1.0 (terminal AI assistant)' },
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch (err) {
+    return `Error fetching ${url}: ${(err as Error).message}`
+  }
+
+  if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText} — ${url}`
+
+  const contentType = res.headers.get('content-type') ?? ''
+  const body = await res.text()
+
+  // HTML: strip tags and boilerplate, return readable text
+  if (contentType.includes('text/html')) {
+    const text = stripHtml(body)
+    const truncated = text.length > MAX_FETCH_CHARS
+      ? text.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${text.length} total]`
+      : text
+    return `[${url}]\n\n${truncated}`
+  }
+
+  // Plain text / JSON / YAML / etc — return as-is
+  const truncated = body.length > MAX_FETCH_CHARS
+    ? body.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${body.length} total]`
+    : body
+  return `[${url}]\n\n${truncated}`
+}
+
+function stripHtml(html: string): string {
+  // Remove script, style, and nav blocks entirely
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+    .replace(/<header[\s\S]*?<\/header>/gi, '')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+
+  // Block-level elements → newlines
+  text = text
+    .replace(/<\/?(p|div|section|article|h[1-6]|li|tr|blockquote|pre)[^>]*>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?(ul|ol|table|thead|tbody)[^>]*>/gi, '\n')
+
+  // Strip remaining tags
+  text = text.replace(/<[^>]+>/g, '')
+
+  // Decode common HTML entities
+  text = text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+
+  // Collapse whitespace
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 const MAX_DISPLAY_LINES = 10
