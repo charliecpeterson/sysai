@@ -73,6 +73,16 @@ Set GITHUB_TOKEN env var for higher rate limits (60 req/hr anonymous → 5000/hr
       url: z.string().describe('GitHub URL or owner/repo[/path] shorthand'),
     }),
   }),
+
+  web_search: tool({
+    description: `Search the web and return full content from the top results.
+Uses Jina Search — returns extracted page content, not just snippets.
+Use for: current events, documentation, anything not in the knowledge base.
+Set SYSAI_NO_JINA=1 to disable (web search will be unavailable).`,
+    inputSchema: z.object({
+      query: z.string().describe('Search query'),
+    }),
+  }),
 }
 
 /**
@@ -284,6 +294,11 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
       return githubRead(args.url as string)
     }
 
+    case 'web_search': {
+      if (!args.query) return 'Error: no query provided'
+      return webSearch(args.query as string)
+    }
+
     case 'search_kb': {
       if (!args.query) return 'Error: no query provided'
       const originalQuery = args.query as string
@@ -346,8 +361,35 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
   }
 }
 
-const MAX_FETCH_CHARS = 50_000  // ~12k tokens — enough for most docs pages
-const JINA_BASE       = 'https://r.jina.ai/'
+const MAX_FETCH_CHARS  = 50_000  // ~12k tokens — enough for most docs pages
+const JINA_BASE        = 'https://r.jina.ai/'
+const JINA_SEARCH_BASE = 'https://s.jina.ai/'
+
+async function webSearch(query: string): Promise<string> {
+  if (process.env.SYSAI_NO_JINA) {
+    return 'Web search is disabled (SYSAI_NO_JINA=1). Unset it to enable Jina-powered search.'
+  }
+
+  const url = `${JINA_SEARCH_BASE}?q=${encodeURIComponent(query)}`
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'sysai/1.0 (terminal AI assistant)',
+        'Accept': 'text/plain',
+        'X-Return-Format': 'markdown',
+      },
+      signal: AbortSignal.timeout(25_000),
+    })
+    if (!res.ok) return `Search error: HTTP ${res.status} ${res.statusText}`
+    const body = await res.text()
+    const truncated = body.length > MAX_FETCH_CHARS
+      ? body.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${body.length} total]`
+      : body
+    return truncated
+  } catch (err) {
+    return `Search error: ${(err as Error).message}`
+  }
+}
 const GH_API          = 'https://api.github.com'
 const GH_RAW          = 'https://raw.githubusercontent.com'
 
