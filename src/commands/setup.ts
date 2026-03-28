@@ -398,6 +398,8 @@ export async function status(): Promise<void> {
   process.stdout.write(`    SYSAI_MAX_TOKENS      ${ev('SYSAI_MAX_TOKENS',   '8192')}  — max tokens per response\n`)
   process.stdout.write(`    SYSAI_BASH_TIMEOUT    ${ev('SYSAI_BASH_TIMEOUT',  '120')}  — seconds before killing a bash command\n`)
   process.stdout.write(`    SYSAI_COMPACT_KEEP    ${ev('SYSAI_COMPACT_KEEP',    '6')}  — turns to keep when compacting\n`)
+  process.stdout.write(`    SYSAI_NO_JINA         ${process.env.SYSAI_NO_JINA ? `${YELLOW}1 (Jina disabled)${RESET}` : `${DIM}unset (Jina enabled)${RESET}`}  — disable Jina Reader and web search\n`)
+  process.stdout.write(`    GITHUB_TOKEN          ${process.env.GITHUB_TOKEN   ? `${GREEN}set${RESET}` : `${DIM}unset (60 req/hr)${RESET}`}  — GitHub API token (5000 req/hr when set)\n`)
   process.stdout.write(`\n  ${DIM}sysai model <name>${RESET}   switch active model\n`)
   process.stdout.write(`  ${DIM}sysai setup${RESET}           add / remove models\n\n`)
 }

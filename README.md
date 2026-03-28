@@ -468,6 +468,8 @@ sysai status
     SYSAI_MAX_TOKENS      8192 (default)  — max tokens per response
     SYSAI_BASH_TIMEOUT    120 (default)  — seconds before killing a bash command
     SYSAI_COMPACT_KEEP    6 (default)  — turns to keep when compacting
+    SYSAI_NO_JINA         unset (Jina enabled)  — disable Jina Reader and web search
+    GITHUB_TOKEN          unset (60 req/hr)  — GitHub API token (5000 req/hr when set)
     SYSAI_NO_JINA         unset (default) — set to 1 to disable Jina Reader and web search
     GITHUB_TOKEN          unset (default) — GitHub personal access token (60 → 5000 req/hr)
 
@@ -558,8 +560,12 @@ Set `SYSAI_NO_JINA=1` to disable Jina Reader and use direct fetch + HTML strippi
      ├─→ LLM calls bash → user approves → runs → output fed back
      ├─→ LLM calls read_file with offset/limit → reads chunk → fed back
      ├─→ LLM calls write_file → shows diff → user approves → writes file
+     ├─→ LLM calls fetch_url → Jina Reader extracts page → fed back
+     ├─→ LLM calls web_search → Jina Search returns full content → fed back
+     ├─→ LLM calls github → GitHub API/raw fetch → fed back
+     ├─→ LLM calls search_kb / list_kb_files → KB search → fed back
      ├─→ LLM calls MCP tool → user approves → MCP server executes
-     └─→ LLM streams text → rendered with markdown formatting
+     └─→ LLM streams text → rendered with markdown + syntax highlighting
 
 sysai doctor  (task)
      │
@@ -706,8 +712,8 @@ sysai/
 │   ├── commands/
 │   │   ├── ask.ts             ← one-shot ? query (agentic)
 │   │   ├── chat.ts            ← interactive chat with session management and tmux split
-│   │   ├── kb.ts              ← kb add / list / index / on / off / delete commands
-│   │   ├── mcp.ts             ← mcp list / add / remove commands
+│   │   ├── kb.ts              ← kb add / add-file / list / index / on / off / delete commands
+│   │   ├── mcp.ts             ← mcp list / add / edit / remove / test commands
 │   │   └── setup.ts           ← model setup wizard, status, list, switch
 │   ├── core/
 │   │   ├── agent.ts           ← agentic loop: streamText → tool calls → approval → execute
@@ -728,7 +734,7 @@ sysai/
 │       ├── approval.ts        ← tool approval prompts and agent UI wiring
 │       ├── colors.ts          ← ANSI color constants
 │       ├── errors.ts          ← API error formatting
-│       └── render.ts          ← spinner, streaming markdown renderer, write diff
+│       └── render.ts          ← spinner, streaming markdown renderer, syntax highlighting, write diff
 ├── tasks/                     ← built-in tasks (doctor.md, jobcheck.md)
 ├── shell.bash                 ← shell integration (? function)
 ├── build.sh                   ← cross-compile via bun
@@ -740,5 +746,6 @@ sysai/
 - [bun](https://bun.sh) — required to run from source or build binaries
 - bash or zsh
 - tmux (optional — enables split-pane chat and terminal buffer context)
+- [bat](https://github.com/sharkdp/bat) (optional — syntax highlighting in code blocks; `brew install bat` or `apt install bat`)
 - poppler-utils (optional — enables PDF support in knowledge bases via `pdftotext`)
 - An API key for Anthropic or OpenAI, or a local model endpoint (Ollama, llama.cpp)
