@@ -60,6 +60,19 @@ For raw files (JSON, YAML, plain text), content is returned as-is.`,
       url: z.string().describe('URL to fetch'),
     }),
   }),
+
+  github: tool({
+    description: `Read files or list directories from public GitHub repositories.
+Accepts GitHub URLs in any common format:
+  https://github.com/owner/repo/blob/main/path/to/file.ts  → file content
+  https://github.com/owner/repo/tree/main/src               → directory listing
+  https://github.com/owner/repo                             → repo root + README
+  owner/repo                                                → shorthand for root
+Set GITHUB_TOKEN env var for higher rate limits (60 req/hr anonymous → 5000/hr).`,
+    inputSchema: z.object({
+      url: z.string().describe('GitHub URL or owner/repo[/path] shorthand'),
+    }),
+  }),
 }
 
 /**
@@ -259,6 +272,11 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
       return fetchUrl(args.url as string)
     }
 
+    case 'github': {
+      if (!args.url) return 'Error: no URL provided'
+      return githubRead(args.url as string)
+    }
+
     case 'search_kb': {
       if (!args.query) return 'Error: no query provided'
       const originalQuery = args.query as string
@@ -322,7 +340,134 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
 }
 
 const MAX_FETCH_CHARS = 50_000  // ~12k tokens — enough for most docs pages
-const JINA_BASE = 'https://r.jina.ai/'
+const JINA_BASE       = 'https://r.jina.ai/'
+const GH_API          = 'https://api.github.com'
+const GH_RAW          = 'https://raw.githubusercontent.com'
+
+/**
+ * Parse a GitHub URL or shorthand into { owner, repo, ref, path, type }.
+ * type: 'file' | 'dir' | 'root' | 'unknown'
+ */
+function parseGithubUrl(input: string): {
+  owner: string; repo: string; ref: string; path: string; type: 'file' | 'dir' | 'root'
+} | null {
+  // Normalise: strip protocol and www
+  let s = input.trim().replace(/^https?:\/\/(www\.)?/, '')
+
+  // raw.githubusercontent.com/owner/repo/ref/path → file
+  if (s.startsWith('raw.githubusercontent.com/')) {
+    const parts = s.slice('raw.githubusercontent.com/'.length).split('/')
+    if (parts.length < 3) return null
+    const [owner, repo, ref, ...rest] = parts
+    return { owner, repo, ref, path: rest.join('/'), type: 'file' }
+  }
+
+  // github.com/owner/repo[/blob|tree/ref/path]
+  if (s.startsWith('github.com/')) {
+    s = s.slice('github.com/'.length)
+  }
+
+  const parts = s.split('/')
+  if (parts.length < 2) return null
+  const [owner, repo, verb, ref, ...rest] = parts
+
+  if (!verb)        return { owner, repo, ref: 'HEAD', path: '', type: 'root' }
+  if (verb === 'blob') return { owner, repo, ref: ref ?? 'HEAD', path: rest.join('/'), type: 'file' }
+  if (verb === 'tree') return { owner, repo, ref: ref ?? 'HEAD', path: rest.join('/'), type: 'dir'  }
+
+  // shorthand: owner/repo/path — treat as file attempt
+  return { owner, repo, ref: 'HEAD', path: [verb, ref, ...rest].filter(Boolean).join('/'), type: 'file' }
+}
+
+async function githubRead(input: string): Promise<string> {
+  const parsed = parseGithubUrl(input)
+  if (!parsed) return `Error: could not parse GitHub URL: ${input}`
+
+  const { owner, repo, ref, path, type } = parsed
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github.v3+json',
+    'User-Agent': 'sysai/1.0',
+  }
+  if (process.env.GITHUB_TOKEN) headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`
+
+  // File: fetch raw content directly
+  if (type === 'file' && path) {
+    const rawUrl = `${GH_RAW}/${owner}/${repo}/${ref}/${path}`
+    try {
+      const res = await fetch(rawUrl, { headers: { 'User-Agent': 'sysai/1.0' }, signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) return `Error: HTTP ${res.status} fetching ${rawUrl}`
+      const body = await res.text()
+      const truncated = body.length > MAX_FETCH_CHARS
+        ? body.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated — ${body.length} chars total]`
+        : body
+      return `[${owner}/${repo}  ${path}  (${ref})]\n\n${truncated}`
+    } catch (err) {
+      return `Error: ${(err as Error).message}`
+    }
+  }
+
+  // Directory or root: use Contents API
+  const apiPath = path ? `/repos/${owner}/${repo}/contents/${path}` : `/repos/${owner}/${repo}/contents`
+  const apiUrl  = `${GH_API}${apiPath}${ref !== 'HEAD' ? `?ref=${ref}` : ''}`
+
+  try {
+    const res = await fetch(apiUrl, { headers, signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      return `Error: HTTP ${res.status} — ${body.slice(0, 200)}`
+    }
+
+    const data = await res.json() as unknown
+
+    // Single file returned (API returns object, not array)
+    if (!Array.isArray(data)) {
+      const f = data as { type: string; content?: string; encoding?: string; download_url?: string }
+      if (f.type === 'file' && f.content && f.encoding === 'base64') {
+        const text = Buffer.from(f.content.replace(/\n/g, ''), 'base64').toString('utf8')
+        const truncated = text.length > MAX_FETCH_CHARS
+          ? text.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated — ${text.length} chars total]`
+          : text
+        return `[${owner}/${repo}  ${path}  (${ref})]\n\n${truncated}`
+      }
+      return `Error: unexpected response from GitHub API`
+    }
+
+    // Directory listing
+    const entries = (data as Array<{ name: string; type: string; size: number }>)
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      .map(e => {
+        const icon = e.type === 'dir' ? '📁' : '📄'
+        const size = e.type === 'file' ? `  (${e.size < 1024 ? e.size + 'B' : (e.size / 1024).toFixed(1) + 'K'})` : ''
+        return `${icon} ${e.name}${size}`
+      })
+
+    const location = path ? `${owner}/${repo}/${path}` : `${owner}/${repo}`
+    let result = `[${location}  (${ref})]\n\n${entries.join('\n')}`
+
+    // For root, also fetch README if present
+    if (type === 'root') {
+      const readmeEntry = (data as Array<{ name: string; download_url: string | null }>)
+        .find(e => /^readme(\.(md|txt|rst))?$/i.test(e.name))
+      if (readmeEntry?.download_url) {
+        try {
+          const rr = await fetch(readmeEntry.download_url, { signal: AbortSignal.timeout(10_000) })
+          if (rr.ok) {
+            const readme = await rr.text()
+            const preview = readme.length > 3000 ? readme.slice(0, 3000) + '\n\n[... README truncated]' : readme
+            result += `\n\n---\n\n${preview}`
+          }
+        } catch {}
+      }
+    }
+
+    return result
+  } catch (err) {
+    return `Error: ${(err as Error).message}`
+  }
+}
 
 async function fetchUrl(url: string): Promise<string> {
   // Probe content type with a direct HEAD request first (fast, no body)

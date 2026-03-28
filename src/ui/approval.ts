@@ -50,6 +50,11 @@ export function makeApproval(rl: RLInterface, {
       return 'approved'
     }
 
+    if (name === 'github') {
+      writeFn(`${DIM}  ○ github  ${args.url ?? '?'}${RESET}\n`)
+      return 'approved'
+    }
+
     if (name === 'bash') {
       if (autoApprove) {
         writeFn(`\n${YELLOW}  ● run${RESET}   ${args.command}  ${DIM}(auto)${RESET}\n`)
@@ -89,7 +94,7 @@ export function makeApproval(rl: RLInterface, {
     }
 
     // MCP tools — anything that isn't a built-in tool
-    const BUILTIN_TOOLS = new Set(['bash', 'read_file', 'write_file', 'search_kb', 'list_kb_files', 'fetch_url'])
+    const BUILTIN_TOOLS = new Set(['bash', 'read_file', 'write_file', 'search_kb', 'list_kb_files', 'fetch_url', 'github'])
     if (!BUILTIN_TOOLS.has(name)) {
       const argsStr = JSON.stringify(args)
       writeFn(`\n${CYAN}  ● mcp${RESET}   ${name}  ${DIM}${argsStr}${RESET}\n`)

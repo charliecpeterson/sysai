@@ -469,6 +469,7 @@ sysai status
     SYSAI_BASH_TIMEOUT    120 (default)  — seconds before killing a bash command
     SYSAI_COMPACT_KEEP    6 (default)  — turns to keep when compacting
     SYSAI_NO_JINA         unset (default) — set to 1 to disable Jina Reader
+    GITHUB_TOKEN          unset (default) — GitHub personal access token (60 → 5000 req/hr)
 
   sysai model <name>   switch active model
   sysai setup          add / remove models
@@ -577,6 +578,7 @@ sysai doctor  (task)
 | `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading of large files. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
 | `fetch_url` | auto | Fetch a URL and return its content as clean markdown. HTML pages are routed through [Jina Reader](https://jina.ai/reader/) for high-quality extraction — no API key needed. Raw files (JSON, YAML, plain text) are returned as-is. Capped at 50k chars. |
+| `github` | auto | Read files or list directories from public GitHub repos. Accepts any GitHub URL format or `owner/repo[/path]` shorthand. Fetches READMEs automatically for repo roots. Set `GITHUB_TOKEN` for higher rate limits. |
 | `search_kb` | auto | Hybrid BM25 + cosine search over active knowledge bases. Automatically expands the query with 2 alternate phrasings and merges results. File name matches are boosted. Available in search mode (>80k tokens). |
 | `list_kb_files` | auto | List all files in active KBs with paths and sizes. Helps the AI browse before searching. Available in search mode. |
 | MCP tools | ask user | Any tool exposed by a configured MCP server, called by its original name. Auto-approved with `-y`. Result preview shown inline. |
