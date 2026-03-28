@@ -10,6 +10,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, unlinkSync, renameSync, mkdirSync, openSync, readSync, closeSync } from 'fs'
+import { randomBytes } from 'crypto'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { Session, SessionMeta, SessionSummary, ModelMessage } from '../types.js'
@@ -25,7 +26,8 @@ export function createSession(hostname = 'unknown'): Session {
   ensureDir()
   const ts = new Date().toISOString()
   const safe = ts.replace(/[:.]/g, '-').slice(0, 19)  // 2026-03-23T14-30-00
-  const file = join(HISTORY_DIR, `${safe}.jsonl`)
+  const suffix = randomBytes(3).toString('hex')       // avoid collisions
+  const file = join(HISTORY_DIR, `${safe}-${suffix}.jsonl`)
 
   const meta: SessionMeta = { ts, hostname, title: null, turns: 0 }
   writeFileSync(file, JSON.stringify(meta) + '\n', 'utf8')

@@ -62,7 +62,13 @@ function makeFilteredFetch(): typeof globalThis.fetch {
 
     const filtered = new ReadableStream({
       async pull(controller) {
-        const { done, value } = await reader.read()
+        let done: boolean, value: Uint8Array | undefined
+        try {
+          ({ done, value } = await reader.read())
+        } catch (err) {
+          controller.error(err)
+          return
+        }
         if (done) {
           // flush any remaining buffer
           if (buf) controller.enqueue(enc.encode(buf))

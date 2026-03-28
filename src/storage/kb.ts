@@ -170,6 +170,11 @@ export function loadActiveKbText(): { text: string; kbNames: string[] } | null {
     if (!existsSync(indexPath)) continue
 
     try {
+      const indexSize = statSync(indexPath).size
+      if (indexSize > 50 * 1024 * 1024) {  // 50 MB safety limit
+        process.stderr.write(`sysai: warning: KB "${name}" index too large (${(indexSize / 1024 / 1024).toFixed(0)} MB), skipping\n`)
+        continue
+      }
       const chunks = JSON.parse(readFileSync(indexPath, 'utf8')) as KbChunk[]
       if (chunks.length === 0) continue
 

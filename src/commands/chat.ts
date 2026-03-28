@@ -30,9 +30,9 @@ import type { Session, ModelMessage } from '../types.js'
 
 async function main(): Promise<void> {
   if (!process.argv.includes('--inline')) {
-    const isBundled = !process.argv[1]?.endsWith('.js') && !process.argv[1]?.endsWith('.ts')
+    const isBundled = (process.argv[1]?.includes('/$bunfs/')) || (!process.argv[1]?.endsWith('.js') && !process.argv[1]?.endsWith('.ts'))
     const chatCmd = isBundled
-      ? `${process.argv[1]} chat --inline`
+      ? `${process.execPath} chat --inline`
       : `${process.execPath} ${process.argv[1]} chat --inline`
     const quotedCmd = chatCmd.replace(/'/g, `'\\''`)
 
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
       process.exit(0)
     }
 
-    const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0
+    const hasTmux = spawnSync('sh', ['-c', 'command -v tmux'], { encoding: 'utf8', stdio: 'ignore' }).status === 0
     if (hasTmux) {
       // Not in tmux but it's available — start a new session with the split
       process.stderr.write(`${DIM}  starting tmux…${RESET}\n`)

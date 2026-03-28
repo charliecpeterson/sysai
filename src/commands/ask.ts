@@ -33,13 +33,21 @@ async function main(): Promise<void> {
 
   let stdinContent = ''
   if (!process.stdin.isTTY) {
-    try { stdinContent = readFileSync('/dev/stdin', 'utf8') } catch {}
+    try { stdinContent = readFileSync('/dev/stdin', 'utf8') } catch {
+      process.stderr.write('sysai: warning: /dev/stdin unavailable — piped input will be ignored\n')
+    }
   }
 
   // Use /dev/tty for approval prompts so they work even when stdin is piped
   const ttyInput = process.stdin.isTTY
     ? process.stdin
-    : (() => { try { return createReadStream('/dev/tty') } catch { return process.stdin } })()
+    : (() => {
+        try { return createReadStream('/dev/tty') }
+        catch {
+          process.stderr.write('sysai: warning: /dev/tty unavailable — interactive prompts may not work\n')
+          return process.stdin
+        }
+      })()
 
   const rl = readline.createInterface({ input: ttyInput, output: process.stderr, terminal: true })
 

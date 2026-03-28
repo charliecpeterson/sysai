@@ -118,7 +118,15 @@ export async function taskEdit(name: string): Promise<void> {
   if (!existsSync(path)) {
     writeFileSync(path, `---\ndescription: ${name}\nauto_run:\n  - echo "add commands here"\n---\nDescribe what the AI should do with the output above.\n`, 'utf8')
   }
-  spawnSync(process.env.VISUAL || process.env.EDITOR || 'vi', [path], { stdio: 'inherit' })
+  const editor = process.env.VISUAL || process.env.EDITOR || 'vi'
+  const editorBin = editor.split(/\s+/)[0]
+  const hasEditor = spawnSync('sh', ['-c', `command -v ${editorBin}`], { stdio: 'ignore' }).status === 0
+  if (!hasEditor) {
+    process.stderr.write(`Editor "${editorBin}" not found. Set $EDITOR and try again.\n`)
+    process.stderr.write(`  File: ${path}\n`)
+    return
+  }
+  spawnSync(editor, [path], { stdio: 'inherit' })
 }
 
 export async function taskRm(name: string): Promise<void> {
@@ -169,7 +177,13 @@ export async function runTaskCmd(task: Task, { dryRun = false } = {}): Promise<v
   // Use /dev/tty for approval prompts so they work even when stdin is piped
   const ttyInput = process.stdin.isTTY
     ? process.stdin
-    : (() => { try { return createReadStream('/dev/tty') } catch { return process.stdin } })()
+    : (() => {
+        try { return createReadStream('/dev/tty') }
+        catch {
+          process.stderr.write('sysai: warning: /dev/tty unavailable — interactive prompts may not work\n')
+          return process.stdin
+        }
+      })()
   const rl = createInterface({ input: ttyInput, output: process.stderr, terminal: true })
 
   const abortController = new AbortController()

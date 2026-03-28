@@ -59,8 +59,11 @@ export function formatApiError(err: unknown): string {
     return `Provider server error (${status}) — try again shortly`
 
   const msg = String(e.message ?? '')
-  if (/fetch failed|ECONNREFUSED|ENOTFOUND/i.test(msg))
-    return 'Connection failed — check network or base URL  (sysai setup)'
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND/i.test(msg)) {
+    const proxyHint = process.env.HTTP_PROXY || process.env.HTTPS_PROXY
+      ? '' : '  Set $HTTPS_PROXY if behind a proxy.'
+    return `Connection failed — check network or base URL  (sysai setup)${proxyHint}`
+  }
   if (/ETIMEDOUT|timed? out|timeout/i.test(msg))
     return 'Request timed out — model may be slow or unreachable'
   if (/ECONNRESET|socket hang up/i.test(msg))

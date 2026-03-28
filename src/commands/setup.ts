@@ -484,6 +484,13 @@ export async function editInstructions(): Promise<void> {
   }
 
   const editor = process.env.VISUAL || process.env.EDITOR || 'vi'
+  const editorBin = editor.split(/\s+/)[0]  // handle "code --wait" style values
+  const hasEditor = spawnSync('sh', ['-c', `command -v ${editorBin}`], { stdio: 'ignore' }).status === 0
+  if (!hasEditor) {
+    process.stderr.write(`Editor "${editorBin}" not found. Set $EDITOR and try again.\n`)
+    process.stderr.write(`  File: ${path}\n`)
+    return
+  }
   spawnSync(editor, [path], { stdio: 'inherit' })
 }
 

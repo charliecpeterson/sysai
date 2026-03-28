@@ -234,7 +234,8 @@ async function install(): Promise<void> {
 
   // If running from a compiled binary, copy it
   // If running via bun from source, symlink main.ts
-  const isBundled = !selfPath.endsWith('.js') && !selfPath.endsWith('.ts')
+  // Bun compiled binaries set argv[1] to /$bunfs/root/... (virtual FS); source runs end in .ts/.js
+  const isBundled = selfPath.includes('/$bunfs/') || (!selfPath.endsWith('.js') && !selfPath.endsWith('.ts'))
 
   if (isBundled) {
     // Compiled binary — copy ourselves to ~/.sysai/bin/sysai
@@ -265,9 +266,15 @@ async function install(): Promise<void> {
 
       const mainTs = join(srcDir, 'main.ts')
       try { unlinkSync(binPath) } catch {}
-      symlinkSync(mainTs, binPath)
+      try {
+        symlinkSync(mainTs, binPath)
+        process.stdout.write(`${GREEN}  ✓${RESET} Linked ~/.sysai/bin/sysai → ${mainTs}\n`)
+      } catch {
+        // Symlinks may fail on NFS/Lustre/restricted filesystems — fall back to copy
+        copyFileSync(mainTs, binPath)
+        process.stdout.write(`${GREEN}  ✓${RESET} Copied source to ~/.sysai/bin/sysai (symlink unavailable)\n`)
+      }
       chmodSync(mainTs, 0o755)
-      process.stdout.write(`${GREEN}  ✓${RESET} Linked ~/.sysai/bin/sysai → ${mainTs}\n`)
 
       // Install npm dependencies if needed
       const nmPath = join(srcDir, 'node_modules')
