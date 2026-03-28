@@ -163,7 +163,7 @@ export async function runAgent({
               type: 'tool-call',
               toolCallId: part.toolCallId,
               toolName:   part.toolName,
-              input:      part.input ?? (part as unknown as Record<string, unknown>)['args'],
+              input:      part.input ?? (part as unknown as Record<string, unknown>)['args'] ?? {},
             }
           }
           if (part.type === 'text') return { type: 'text', text: part.text }

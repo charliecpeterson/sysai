@@ -14,6 +14,43 @@ import { McpClientManager } from '../core/mcp-client.js'
 import { RESET, BOLD, DIM, RED, GREEN, CYAN, YELLOW } from '../ui/colors.js'
 import type { McpServerConfig } from '../types.js'
 
+/**
+ * Parse a shell-style argument string into an array of tokens.
+ * Handles single and double quotes, and escaped characters within quotes.
+ * e.g. '-y @some/pkg --key "val with spaces"' → ['-y', '@some/pkg', '--key', 'val with spaces']
+ */
+function parseShellArgs(raw: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let inSingle = false
+  let inDouble = false
+  let i = 0
+
+  while (i < raw.length) {
+    const ch = raw[i]
+    if (inSingle) {
+      if (ch === "'") { inSingle = false }
+      else { current += ch }
+    } else if (inDouble) {
+      if (ch === '\\' && i + 1 < raw.length) { current += raw[++i] }
+      else if (ch === '"') { inDouble = false }
+      else { current += ch }
+    } else {
+      if (ch === "'") { inSingle = true }
+      else if (ch === '"') { inDouble = true }
+      else if (ch === '\\' && i + 1 < raw.length) { current += raw[++i] }
+      else if (/\s/.test(ch)) {
+        if (current) { tokens.push(current); current = '' }
+      } else {
+        current += ch
+      }
+    }
+    i++
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
 export async function listMcps(): Promise<void> {
   const servers = listMcpServers()
 
@@ -54,7 +91,7 @@ export async function addMcp(): Promise<void> {
   if (!command) { process.stdout.write(`${RED}  No command provided.${RESET}\n`); rl.close(); return }
 
   const argsRaw = (await ask(`  Args ${DIM}(e.g. -y @example/weather-mcp, enter to skip)${RESET}: `)).trim()
-  const args = argsRaw ? argsRaw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(a => a.replace(/^['"]|['"]$/g, '')) : undefined
+  const args = argsRaw ? parseShellArgs(argsRaw) : undefined
 
   const envRaw = (await ask(`  Env vars ${DIM}(KEY=val KEY2=val2, enter to skip)${RESET}: `)).trim()
   let env: Record<string, string> | undefined
@@ -151,7 +188,7 @@ export async function editMcp(name?: string): Promise<void> {
   const currentArgs = existing.args?.join(' ') ?? ''
   const argsRaw     = (await ask(`  Args ${DIM}[${currentArgs || 'none'}]${RESET}: `)).trim()
   const args        = argsRaw
-    ? argsRaw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(a => a.replace(/^['"]|['"]$/g, ''))
+    ? parseShellArgs(argsRaw)
     : (argsRaw === '' && currentArgs ? existing.args : undefined)
 
   const currentEnv = existing.env

@@ -32,14 +32,16 @@ export async function addKb(args: string[]): Promise<void> {
   if (!name) {
     const rl  = createInterface({ input: process.stdin, output: process.stdout })
     const ask = (q: string) => new Promise<string>(resolve => rl.question(q, resolve))
-
-    process.stdout.write(`\n  ${CYAN}Create knowledge base${RESET}\n\n`)
-    name = (await ask('  Name: ')).trim()
-    if (!name) { process.stdout.write(`${RED}  No name provided.${RESET}\n`); rl.close(); return }
-    if (!description) {
-      description = (await ask('  Description (what is this KB about?): ')).trim()
+    try {
+      process.stdout.write(`\n  ${CYAN}Create knowledge base${RESET}\n\n`)
+      name = (await ask('  Name: ')).trim()
+      if (!name) { process.stdout.write(`${RED}  No name provided.${RESET}\n`); return }
+      if (!description) {
+        description = (await ask('  Description (what is this KB about?): ')).trim()
+      }
+    } finally {
+      rl.close()
     }
-    rl.close()
   }
 
   if (!description) {
@@ -180,9 +182,12 @@ export async function indexKbCmd(name?: string): Promise<void> {
     )
     process.stdout.write(`    0) None ${DIM}(BM25 only — no API calls)${RESET}\n\n`)
 
-    const defaultChoice = embeddings.length === 1 ? '1' : '1'
-    const choice = (await ask(`  Choose embedding [${defaultChoice}]: `)).trim()
-    rl.close()
+    let choice: string
+    try {
+      choice = (await ask(`  Choose embedding [1]: `)).trim()
+    } finally {
+      rl.close()
+    }
     process.stdout.write('\n')
 
     if (choice === '0') {

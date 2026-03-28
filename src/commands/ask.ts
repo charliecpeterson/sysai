@@ -66,6 +66,7 @@ async function main(): Promise<void> {
       contentStream: process.stdout,
       uiStream:      process.stderr,
     })
+    process.stdout.write('\n')
   } catch (err) {
     if (abortController.signal.aborted) {
       process.stderr.write(`\n${DIM}  cancelled${RESET}\n`)
@@ -73,10 +74,10 @@ async function main(): Promise<void> {
     }
     process.stderr.write(`\n${RED}sysai: ${formatApiError(err)}${RESET}\n`)
     process.exit(1)
+  } finally {
+    rl.close()
   }
 
-  process.stdout.write('\n')
-  rl.close()
   process.exit(0)
 }
 
