@@ -628,6 +628,9 @@ function extractPdf(filePath: string): string {
  * when a single file exceeds ~8k tokens to keep index.json manageable.
  */
 const MAX_CHUNK_CHARS = 8000 * CHARS_PER_TOKEN  // ~8k tokens
+// Overlap: carry this many chars of context from the end of the previous chunk.
+// Aligned to a paragraph boundary so we never split mid-sentence.
+const OVERLAP_CHARS = 400
 
 function chunkText(text: string, file: string): KbChunk[] {
   if (text.length <= MAX_CHUNK_CHARS) {
@@ -637,14 +640,32 @@ function chunkText(text: string, file: string): KbChunk[] {
   // Split on paragraph boundaries (double newline), then combine into chunks
   const paragraphs = text.split(/\n{2,}/)
   const chunks: KbChunk[] = []
+  // paragraphBuffer[i] = { text, cumulative end position in current chunk }
   let current = ''
+  let paraStarts: number[] = []  // char offsets of each paragraph's start in current
   let idx = 0
+
+  const flush = () => {
+    chunks.push({ file, index: idx++, text: current.trim() })
+
+    // Build overlap: walk back through paraStarts to find paragraphs that fit in OVERLAP_CHARS
+    let overlapStart = current.length
+    for (let i = paraStarts.length - 1; i >= 0; i--) {
+      if (current.length - paraStarts[i] <= OVERLAP_CHARS) {
+        overlapStart = paraStarts[i]
+      } else {
+        break
+      }
+    }
+    current = current.slice(overlapStart).trimStart()
+    paraStarts = current ? [0] : []
+  }
 
   for (const para of paragraphs) {
     if (current.length + para.length + 2 > MAX_CHUNK_CHARS && current.length > 0) {
-      chunks.push({ file, index: idx++, text: current.trim() })
-      current = ''
+      flush()
     }
+    paraStarts.push(current.length ? current.length + 2 : 0)
     current += (current ? '\n\n' : '') + para
   }
   if (current.trim()) {
