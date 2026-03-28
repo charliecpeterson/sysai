@@ -468,6 +468,7 @@ sysai status
     SYSAI_MAX_TOKENS      8192 (default)  — max tokens per response
     SYSAI_BASH_TIMEOUT    120 (default)  — seconds before killing a bash command
     SYSAI_COMPACT_KEEP    6 (default)  — turns to keep when compacting
+    SYSAI_NO_JINA         unset (default) — set to 1 to disable Jina Reader
 
   sysai model <name>   switch active model
   sysai setup          add / remove models
@@ -531,6 +532,8 @@ Use `/status` to see current token usage and decide when to compact.
 
 Set `SYSAI_MAX_TURNS` in your environment to limit agent iterations (default: 20). Useful for local models with small context windows.
 
+Set `SYSAI_NO_JINA=1` to disable Jina Reader and use direct fetch + HTML stripping instead. Useful in air-gapped environments or if you prefer URLs not to pass through a third-party service.
+
 ## How it works
 
 ```
@@ -573,6 +576,7 @@ sysai doctor  (task)
 | `bash` | ask user | Run any shell command. Output capped at 20k chars (start + end preserved). |
 | `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading of large files. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
+| `fetch_url` | auto | Fetch a URL and return its content as clean markdown. HTML pages are routed through [Jina Reader](https://jina.ai/reader/) for high-quality extraction — no API key needed. Raw files (JSON, YAML, plain text) are returned as-is. Capped at 50k chars. |
 | `search_kb` | auto | Hybrid BM25 + cosine search over active knowledge bases. Automatically expands the query with 2 alternate phrasings and merges results. File name matches are boosted. Available in search mode (>80k tokens). |
 | `list_kb_files` | auto | List all files in active KBs with paths and sizes. Helps the AI browse before searching. Available in search mode. |
 | MCP tools | ask user | Any tool exposed by a configured MCP server, called by its original name. Auto-approved with `-y`. Result preview shown inline. |

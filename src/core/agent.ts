@@ -322,8 +322,45 @@ async function executeTool(call: { toolName: string; input?: unknown; args?: unk
 }
 
 const MAX_FETCH_CHARS = 50_000  // ~12k tokens — enough for most docs pages
+const JINA_BASE = 'https://r.jina.ai/'
 
 async function fetchUrl(url: string): Promise<string> {
+  // Probe content type with a direct HEAD request first (fast, no body)
+  let contentType = ''
+  try {
+    const head = await fetch(url, {
+      method: 'HEAD',
+      headers: { 'User-Agent': 'sysai/1.0 (terminal AI assistant)' },
+      signal: AbortSignal.timeout(8_000),
+    })
+    contentType = head.headers.get('content-type') ?? ''
+  } catch {
+    // HEAD not supported or timed out — fall through to GET and detect from response
+  }
+
+  const isHtml = contentType.includes('text/html') || contentType === ''
+
+  // HTML pages: route through Jina Reader for clean markdown extraction
+  // unless SYSAI_NO_JINA=1 (air-gapped environments or privacy preference)
+  if (isHtml && !process.env.SYSAI_NO_JINA) {
+    try {
+      const res = await fetch(`${JINA_BASE}${url}`, {
+        headers: { 'User-Agent': 'sysai/1.0 (terminal AI assistant)', 'Accept': 'text/plain' },
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (res.ok) {
+        const body = await res.text()
+        const truncated = body.length > MAX_FETCH_CHARS
+          ? body.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${body.length} total]`
+          : body
+        return `[${url}]\n\n${truncated}`
+      }
+    } catch {
+      // Jina unavailable — fall through to direct fetch
+    }
+  }
+
+  // Direct fetch: plain text, JSON, YAML, raw files — or Jina fallback
   let res: Response
   try {
     res = await fetch(url, {
@@ -336,11 +373,11 @@ async function fetchUrl(url: string): Promise<string> {
 
   if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText} — ${url}`
 
-  const contentType = res.headers.get('content-type') ?? ''
   const body = await res.text()
+  const detectedType = res.headers.get('content-type') ?? ''
 
-  // HTML: strip tags and boilerplate, return readable text
-  if (contentType.includes('text/html')) {
+  // HTML fallback (Jina was disabled or failed): regex-strip
+  if (detectedType.includes('text/html')) {
     const text = stripHtml(body)
     const truncated = text.length > MAX_FETCH_CHARS
       ? text.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${text.length} total]`
@@ -348,7 +385,6 @@ async function fetchUrl(url: string): Promise<string> {
     return `[${url}]\n\n${truncated}`
   }
 
-  // Plain text / JSON / YAML / etc — return as-is
   const truncated = body.length > MAX_FETCH_CHARS
     ? body.slice(0, MAX_FETCH_CHARS) + `\n\n[... truncated at ${MAX_FETCH_CHARS} chars — ${body.length} total]`
     : body
