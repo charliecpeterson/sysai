@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "bun run main.ts chat --inline",
-    "install": "bun run main.ts install",
+    "sysai:install": "bun run main.ts install",
     "build": "bash build.sh",
     "build:local": "bun build --compile --minify main.ts --outfile dist/sysai-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
   },
