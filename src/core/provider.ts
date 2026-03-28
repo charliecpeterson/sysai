@@ -43,10 +43,11 @@ export function getModelInstance(cfg: ModelConfig) {
 }
 
 /**
- * Returns a fetch wrapper that drops non-standard SSE events injected by
- * OpenWebUI (and similar proxies) that lack the `choices` or `error` fields
- * expected by the OpenAI streaming schema — e.g. `{"sources":[...]}`.
- * Without this, @ai-sdk/openai throws AI_TypeValidationError mid-stream.
+ * Returns a fetch wrapper that normalises SSE events from OpenAI-compatible
+ * proxies (OpenWebUI, LiteLLM, etc.) to the strict schema @ai-sdk/openai expects:
+ *  - Drops events without `choices`/`error` (e.g. OpenWebUI `{"sources":[...]}`).
+ *  - Strips unknown top-level fields (obfuscation, service_tier, system_fingerprint)
+ *    that Zod 4 strict objects reject with AI_TypeValidationError.
  */
 function makeFilteredFetch(): typeof globalThis.fetch {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -72,14 +73,23 @@ function makeFilteredFetch(): typeof globalThis.fetch {
         const lines = buf.split('\n')
         buf = lines.pop() ?? ''   // keep incomplete last line for next chunk
 
-        const kept = lines.filter(line => {
-          if (!line.startsWith('data: ')) return true
+        const kept = lines.flatMap(line => {
+          if (!line.startsWith('data: ')) return [line]
           const payload = line.slice(6).trim()
-          if (payload === '[DONE]') return true
+          if (payload === '[DONE]') return [line]
           try {
             const obj = JSON.parse(payload)
-            return 'choices' in obj || 'error' in obj
-          } catch { return true }
+            if (!('choices' in obj) && !('error' in obj)) return []   // drop non-standard events (e.g. OpenWebUI sources)
+            // Strip fields not in the OpenAI streaming schema — Zod 4
+            // strict objects reject unknown keys like obfuscation, service_tier, etc.
+            const { id, created, model, choices, usage, error } = obj
+            const clean = { id, created, model, choices, usage, error }
+            // Remove undefined keys so the JSON stays minimal
+            for (const k of Object.keys(clean) as (keyof typeof clean)[]) {
+              if (clean[k] === undefined) delete clean[k]
+            }
+            return ['data: ' + JSON.stringify(clean)]
+          } catch { return [line] }
         })
         if (kept.length) controller.enqueue(enc.encode(kept.join('\n') + '\n'))
       },
