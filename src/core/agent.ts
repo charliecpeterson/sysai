@@ -54,8 +54,9 @@ then request specific sections based on what you find. Never assume truncated ou
   fetch_url: tool({
     description: `Fetch a URL and return its content as plain text.
 Strips HTML tags, scripts, and styles — returns readable text.
-Use for: documentation pages, API references, man pages, GitHub raw files, any web content.
-For raw files (JSON, YAML, plain text), content is returned as-is.`,
+Use for: documentation pages, API references, man pages, any web content.
+For raw files (JSON, YAML, plain text), content is returned as-is.
+For github.com URLs, prefer the github tool instead — it is faster and more structured.`,
     inputSchema: z.object({
       url: z.string().describe('URL to fetch'),
     }),
