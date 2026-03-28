@@ -104,10 +104,33 @@ const H1      = '\x1b[1;4m'
 const H2      = '\x1b[1m'
 const CODE_BG = '\x1b[48;5;236m\x1b[38;5;252m'
 
+// Detect bat once at startup — null means unavailable
+let batAvailable: boolean | null = null
+function hasBat(): boolean {
+  if (batAvailable === null) {
+    const r = spawnSync('bat', ['--version'], { encoding: 'utf8' })
+    batAvailable = r.status === 0
+  }
+  return batAvailable
+}
+
+function highlightCode(code: string, lang: string): string {
+  if (hasBat()) {
+    const args = ['--color=always', '--paging=never', '--style=plain', '-']
+    if (lang) args.push(`--language=${lang}`)
+    const r = spawnSync('bat', args, { input: code, encoding: 'utf8' })
+    if (r.status === 0 && r.stdout) return r.stdout.trimEnd()
+  }
+  // Fallback: grey background per line
+  return code.split('\n').map(l => CODE_BG + l + RESET).join('\n')
+}
+
 export class StreamRenderer {
   #write: WriteFn
-  #buf = ''
+  #buf = ''          // token buffer (partial lines)
   #inCode = false
+  #lang = ''
+  #codeBuf: string[] = []   // lines accumulated inside a code block
 
   constructor(writeFn: WriteFn) { this.#write = writeFn }
 
@@ -122,17 +145,50 @@ export class StreamRenderer {
   }
 
   flush(): void {
-    if (this.#buf) { this.#line(this.#buf); this.#buf = '' }
+    if (this.#buf) {
+      this.#line(this.#buf)
+      this.#buf = ''
+    }
+    // Unclosed code block at end of stream — flush as plain grey
+    if (this.#inCode && this.#codeBuf.length > 0) {
+      this.#write(this.#codeBuf.map(l => CODE_BG + l + RESET).join('\n'))
+      this.#codeBuf = []
+    }
   }
 
   #line(line: string): void {
-    if (line.trimStart().startsWith('```')) {
-      this.#inCode = !this.#inCode
-      this.#write((this.#inCode ? CODE_BG : RESET) + line + RESET)
+    const trimmed = line.trimStart()
+
+    // Code fence open/close
+    if (trimmed.startsWith('```')) {
+      if (!this.#inCode) {
+        // Opening fence — extract language hint
+        this.#lang = trimmed.slice(3).trim().split(/\s/)[0] ?? ''
+        this.#inCode = true
+        this.#codeBuf = []
+        // Print the fence line itself with grey background
+        this.#write(CODE_BG + line + RESET)
+      } else {
+        // Closing fence — highlight and flush buffered code
+        this.#inCode = false
+        if (this.#codeBuf.length > 0) {
+          const highlighted = highlightCode(this.#codeBuf.join('\n'), this.#lang)
+          this.#write(highlighted)
+          this.#write('\n')
+        }
+        this.#codeBuf = []
+        this.#write(CODE_BG + line + RESET)
+      }
       return
     }
-    if (this.#inCode) { this.#write(CODE_BG + line + RESET); return }
 
+    // Inside a code block — buffer lines for batch highlighting
+    if (this.#inCode) {
+      this.#codeBuf.push(line)
+      return
+    }
+
+    // Normal markdown rendering
     let m: RegExpMatchArray | null
     if ((m = line.match(/^### (.+)/))) { this.#write(H2 + m[1] + RESET); return }
     if ((m = line.match(/^## (.+)/)))  { this.#write(H1 + m[1] + RESET); return }
