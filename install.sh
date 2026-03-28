@@ -58,14 +58,20 @@ fi
 # ── Verify checksum ───────────────────────────────────────────────────────────
 
 echo "  Verifying checksum..."
-if curl -fsSL "$CHECKSUM_URL" -o "$TMP_CHECKSUMS" 2>/dev/null; then
+if ! curl -fsSL "$CHECKSUM_URL" -o "$TMP_CHECKSUMS" 2>/dev/null; then
+  echo "  ⚠ Warning: could not download checksums.txt — skipping verification."
+  echo "    If this concerns you, download manually from https://github.com/${REPO}/releases"
+else
   EXPECTED=$(grep "$BINARY" "$TMP_CHECKSUMS" | awk '{print $1}')
-  if [ -n "$EXPECTED" ]; then
+  if [ -z "$EXPECTED" ]; then
+    echo "  ⚠ Warning: no checksum found for ${BINARY} in checksums.txt"
+  else
     if command -v sha256sum &>/dev/null; then
       ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
     elif command -v shasum &>/dev/null; then
       ACTUAL=$(shasum -a 256 "$TMP" | awk '{print $1}')
     else
+      echo "  ⚠ Warning: neither sha256sum nor shasum found — cannot verify checksum."
       ACTUAL=""
     fi
 
@@ -75,7 +81,9 @@ if curl -fsSL "$CHECKSUM_URL" -o "$TMP_CHECKSUMS" 2>/dev/null; then
       echo "  got:      $ACTUAL"
       exit 1
     fi
-    echo "  ✓ Checksum verified"
+    if [ -n "$ACTUAL" ]; then
+      echo "  ✓ Checksum verified"
+    fi
   fi
 fi
 

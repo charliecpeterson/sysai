@@ -8,17 +8,10 @@
  *   sysai --setup-shell — print shell integration block
  */
 
-const [major] = process.versions.node.split('.').map(Number)
-if (major < 20) {
-  console.error(`sysai requires Node.js 20+. You have ${process.version}.`)
-  console.error('Install with: curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && nvm install 20')
-  process.exit(1)
-}
-
 export { VERSION } from './src/version.js'
 import { VERSION } from './src/version.js'
 
-import { RESET, BOLD, DIM, GREEN, CYAN } from './src/ui/colors.js'
+import { RESET, BOLD, DIM, RED, GREEN, CYAN } from './src/ui/colors.js'
 
 const [, , cmd, ...rest] = process.argv
 
@@ -245,7 +238,9 @@ async function install(): Promise<void> {
 
   if (isBundled) {
     // Compiled binary — copy ourselves to ~/.sysai/bin/sysai
-    copyFileSync(selfPath, binPath)
+    // Use process.execPath (real path on disk), not process.argv[1] which
+    // resolves to /$bunfs/root/... inside Bun's virtual filesystem
+    copyFileSync(process.execPath, binPath)
     chmodSync(binPath, 0o755)
     process.stdout.write(`${GREEN}  ✓${RESET} Installed binary to ~/.sysai/bin/sysai\n`)
   } else {
@@ -259,7 +254,15 @@ async function install(): Promise<void> {
       chmodSync(binPath, 0o755)
       process.stdout.write(`${GREEN}  ✓${RESET} Installed binary to ~/.sysai/bin/sysai\n`)
     } else {
-      // Symlink to source main.ts
+      // Symlink to source main.ts — requires bun at runtime
+      try {
+        execSync('bun --version', { stdio: 'ignore' })
+      } catch {
+        process.stderr.write(`${RED}  ✗${RESET} bun is required to run sysai from source but was not found.\n`)
+        process.stderr.write(`    Install bun: ${CYAN}curl -fsSL https://bun.sh/install | bash${RESET}\n\n`)
+        process.exit(1)
+      }
+
       const mainTs = join(srcDir, 'main.ts')
       try { unlinkSync(binPath) } catch {}
       symlinkSync(mainTs, binPath)
@@ -276,48 +279,97 @@ async function install(): Promise<void> {
     }
   }
 
-  // 3. Ensure ~/.local/bin is available and has sysai
-  const localBin = `${home}/.local/bin`
-  mkdirSync(localBin, { recursive: true })
-  const localLink = `${localBin}/sysai`
-  try { unlinkSync(localLink) } catch {}
-  symlinkSync(binPath, localLink)
-  process.stdout.write(`${GREEN}  ✓${RESET} Linked ~/.local/bin/sysai\n`)
-
-  // 4. Write shell.bash
-  let shellContent: string
+  // 3. Verify the installed binary works
   try {
-    shellContent = readFileSync(join(srcDir, 'shell.bash'), 'utf8')
+    execSync(`"${binPath}" --version`, { stdio: 'ignore' })
+    process.stdout.write(`${GREEN}  ✓${RESET} Binary verified\n`)
   } catch {
-    // Fallback: inline minimal shell.bash
-    shellContent = [
+    process.stderr.write(`${RED}  ✗${RESET} Installed binary failed to run. Your platform may not be supported.\n`)
+    process.exit(1)
+  }
+
+  // 4. Write shell integration files
+  const shell = (process.env.SHELL || 'bash').split('/').pop()
+  const isFish = shell === 'fish'
+
+  // Write shell.bash (used by bash/zsh)
+  let bashContent: string
+  try {
+    bashContent = readFileSync(join(srcDir, 'shell.bash'), 'utf8')
+  } catch {
+    bashContent = [
       '# sysai shell integration — managed by sysai, do not edit manually',
       'SYSAI_BIN="$HOME/.sysai/bin/sysai"',
-      '? () { if [ -t 0 ]; then "$SYSAI_BIN" ask "$@"; else cat | "$SYSAI_BIN" ask "$@"; fi; }',
+      '_sysai_ask () { "$SYSAI_BIN" ask "$@"; }',
+      "alias '?'='_sysai_ask'",
     ].join('\n') + '\n'
   }
-  writeFileSync(`${dir}/shell.bash`, shellContent, { mode: 0o644 })
-  process.stdout.write(`${GREEN}  ✓${RESET} Wrote ~/.sysai/shell.bash\n`)
+  writeFileSync(`${dir}/shell.bash`, bashContent, { mode: 0o644 })
 
-  // 5. Add source line to shell rc file
-  const shell = (process.env.SHELL || 'bash').split('/').pop()
-  const rcFile = shell === 'zsh' ? `${home}/.zshrc` : `${home}/.bashrc`
-  const sourceLine = '[ -f ~/.sysai/shell.bash ] && source ~/.sysai/shell.bash'
+  // Write shell.fish (used by fish)
+  let fishContent: string
+  try {
+    fishContent = readFileSync(join(srcDir, 'shell.fish'), 'utf8')
+  } catch {
+    fishContent = [
+      '# sysai shell integration — managed by sysai, do not edit manually',
+      'set -gx SYSAI_BIN "$HOME/.sysai/bin/sysai"',
+      'function _sysai_ask; $SYSAI_BIN ask $argv; end',
+      "abbr -a '?' '_sysai_ask'",
+    ].join('\n') + '\n'
+  }
+  writeFileSync(`${dir}/shell.fish`, fishContent, { mode: 0o644 })
+  process.stdout.write(`${GREEN}  ✓${RESET} Wrote shell integration files\n`)
+
+  // 5. Add sysai block to shell rc file (PATH + source)
+  let rcFile: string
+  if (shell === 'zsh') {
+    rcFile = `${home}/.zshrc`
+  } else if (isFish) {
+    mkdirSync(`${home}/.config/fish`, { recursive: true })
+    rcFile = `${home}/.config/fish/config.fish`
+  } else if (process.platform === 'darwin') {
+    // macOS Terminal.app opens login shells, which read .bash_profile not .bashrc
+    rcFile = `${home}/.bash_profile`
+  } else {
+    rcFile = `${home}/.bashrc`
+  }
+
+  const BEGIN_MARKER = '# >>> sysai >>>'
+  const END_MARKER   = '# <<< sysai <<<'
+
+  const sysaiBlock = isFish
+    ? [
+        BEGIN_MARKER,
+        'fish_add_path -g "$HOME/.sysai/bin"',
+        'if test -f ~/.sysai/shell.fish; source ~/.sysai/shell.fish; end',
+        END_MARKER,
+      ].join('\n')
+    : [
+        BEGIN_MARKER,
+        'export PATH="$HOME/.sysai/bin:$PATH"',
+        '[ -f ~/.sysai/shell.bash ] && source ~/.sysai/shell.bash',
+        END_MARKER,
+      ].join('\n')
 
   let rcContent = ''
   try { rcContent = readFileSync(rcFile, 'utf8') } catch {}
 
-  if (rcContent.includes('source ~/.sysai/shell.bash')) {
-    process.stdout.write(`${GREEN}  ✓${RESET} Shell integration already in ${rcFile}\n`)
+  if (rcContent.includes(BEGIN_MARKER)) {
+    // Replace existing sysai block
+    const blockRe = new RegExp(`${BEGIN_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+    rcContent = rcContent.replace(blockRe, sysaiBlock)
+    writeFileSync(rcFile, rcContent, 'utf8')
+    process.stdout.write(`${GREEN}  ✓${RESET} Updated sysai block in ${rcFile}\n`)
   } else {
-    // Remove old inline block if present
-    if (rcContent.includes('# sysai shell integration')) {
-      rcContent = rcContent.replace(/# sysai shell integration[\s\S]*?# END_SYSAI\n?/, '')
-      writeFileSync(rcFile, rcContent, 'utf8')
-      process.stdout.write(`${GREEN}  ✓${RESET} Removed old inline integration from ${rcFile}\n`)
+    // Remove legacy source line / inline block if present
+    if (rcContent.includes('source ~/.sysai/shell.bash') || rcContent.includes('# sysai shell integration')) {
+      rcContent = rcContent
+        .replace(/# sysai shell integration[\s\S]*?# END_SYSAI\n?/g, '')
+        .replace(/\[.*~\/.sysai\/shell\.bash.*\].*source.*~\/.sysai\/shell\.bash.*\n?/g, '')
     }
-    writeFileSync(rcFile, rcContent.trimEnd() + '\n\n' + sourceLine + '\n', 'utf8')
-    process.stdout.write(`${GREEN}  ✓${RESET} Added source line to ${rcFile}\n`)
+    writeFileSync(rcFile, rcContent.trimEnd() + '\n\n' + sysaiBlock + '\n', 'utf8')
+    process.stdout.write(`${GREEN}  ✓${RESET} Added sysai block to ${rcFile}\n`)
   }
 
   // 6. Copy built-in tasks (skip if user already has one with the same name)
@@ -344,11 +396,21 @@ async function install(): Promise<void> {
     process.stdout.write(`${GREEN}  ✓${RESET} Config already exists\n\n`)
     process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n`)
     process.stdout.write(`  To reconfigure: ${CYAN}sysai setup${RESET}\n\n`)
+  } else if (!process.stdin.isTTY) {
+    // Non-interactive install (e.g. curl | bash) — skip setup wizard
+    process.stdout.write(`  ${CYAN}sysai${RESET} installed! To configure your AI provider, run:\n\n`)
+    process.stdout.write(`    source ${rcFile}\n`)
+    process.stdout.write(`    sysai setup\n\n`)
   } else {
-    process.stdout.write(`${DIM}  Now let's configure your AI provider:${RESET}\n\n`)
-    const { setup } = await import('./src/commands/setup.js')
-    await setup()
-    process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n\n`)
+    try {
+      process.stdout.write(`${DIM}  Now let's configure your AI provider:${RESET}\n\n`)
+      const { setup } = await import('./src/commands/setup.js')
+      await setup()
+      process.stdout.write(`  Done! Run ${CYAN}source ${rcFile}${RESET} then ${CYAN}? hello${RESET}\n\n`)
+    } catch (err) {
+      process.stderr.write(`\n${RED}  ✗${RESET} Setup failed: ${err instanceof Error ? err.message : err}\n`)
+      process.stderr.write(`    Installation is complete — run ${CYAN}sysai setup${RESET} to configure later.\n\n`)
+    }
   }
 }
 
