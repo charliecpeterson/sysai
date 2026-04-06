@@ -625,7 +625,7 @@ function stripHtml(html: string): string {
 const MAX_DISPLAY_LINES = 10
 const MAX_BASH_OUTPUT   = 20_000   // chars sent to AI
 
-function executeBash(command: string): Promise<string> {
+export function executeBash(command: string): Promise<string> {
   return new Promise((resolve) => {
     const shell = process.env.SHELL || 'bash'
     const proc = spawn(shell, ['-c', command], {

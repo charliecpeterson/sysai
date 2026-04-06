@@ -15,6 +15,7 @@ import { homedir } from 'os'
 import { generateText } from 'ai'
 import { buildContext }   from '../env/context.js'
 import { buildMessages, getSystemPrompt } from '../core/prompt.js'
+import { executeBash } from '../core/agent.js'
 import { makeApproval, runAgentWithUI } from '../ui/approval.js'
 import {
   createSession, appendTurn, listSessions, loadSession,
@@ -27,6 +28,13 @@ import { getActiveConfig, loadModels, switchActive } from '../storage/models.js'
 import { DEFAULTS, getModel } from '../core/provider.js'
 import { RESET, BOLD, DIM, RED, GREEN, YELLOW, CYAN } from '../ui/colors.js'
 import type { Session, ModelMessage } from '../types.js'
+
+const DIRECT_SHELL_COMMANDS = new Set([
+  'ls', 'pwd', 'whoami', 'hostname', 'date', 'uname', 'id',
+  'ps', 'pgrep', 'df', 'du', 'free', 'uptime',
+  'squeue', 'sinfo', 'sacct', 'qstat',
+  'which', 'type', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'stat', 'file', 'cat',
+])
 
 async function main(): Promise<void> {
   if (!process.argv.includes('--inline')) {
@@ -125,6 +133,12 @@ async function main(): Promise<void> {
         setSession: (hist: ModelMessage[], sess: Session | null) => { sessionHistory = hist; currentSession = sess },
       })
       if (result instanceof Promise) await result
+      rl.prompt()
+      return
+    }
+
+    if (await handleDirectShellInput(question, rl)) {
+      process.stdout.write('\n')
       rl.prompt()
       return
     }
@@ -438,6 +452,7 @@ async function handleCommand(
         '  /status        — show token usage and session info',
         '  /model [name]  — switch active model',
         '  /instructions  — edit ~/.sysai/instructions.md',
+        '  bare shell     — safe commands like ls/pwd run directly with approval',
         '  /exit          — quit',
         '  /help          — this message',
         '',
@@ -456,6 +471,33 @@ function readLineOnce(): Promise<string> {
     const tmp = readline.createInterface({ input: process.stdin, output: process.stdout })
     tmp.once('line', (line: string) => { tmp.close(); resolve(line) })
   })
+}
+
+async function handleDirectShellInput(input: string, rl: RLInterface): Promise<boolean> {
+  if (!isLikelyDirectShellInput(input)) return false
+
+  const approve = makeApproval(rl, { writeFn: (s: string) => process.stdout.write(s) })
+  const decision = await approve({ toolName: 'bash', input: { command: input } })
+  if (decision === 'rejected') return true
+
+  const command = decision === 'approved' ? input : decision
+  await executeBash(command)
+  return true
+}
+
+function isLikelyDirectShellInput(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed || trimmed.length > 200 || trimmed.includes('\n') || trimmed.includes('?')) return false
+
+  const lower = trimmed.toLowerCase()
+  if (/^(what|why|how|can|could|would|should|please|tell|explain|summari[sz]e|help|show me|list the|i |i'm |im |my |we |is |are |do |does |did )\b/.test(lower)) {
+    return false
+  }
+
+  const first = trimmed.match(/^([A-Za-z0-9_.:+@/-]+)/)?.[1]
+  if (!first) return false
+
+  return DIRECT_SHELL_COMMANDS.has(first)
 }
 
 main().catch(err => {
