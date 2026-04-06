@@ -2,6 +2,7 @@
 
 - [Usage](#usage)
   - [`?` — one-shot query](#--one-shot-agentic-query)
+  - [`cap` / `??` — capture and analyse](#cap----capture-and-analyse-output)
   - [`sysai chat` — persistent chat](#sysai-chat--persistent-chat)
   - [`sysai <task>` — named tasks](#sysai-task--named-tasks)
 - [Tasks](#tasks)
@@ -46,6 +47,24 @@ When the AI writes a file, a diff is shown before prompting:
   write? [Y/n]:
 ```
 
+### `cap` / `??` — capture and analyse output
+
+For commands with long output you'd normally copy-paste into a chatbot, use `cap` to capture it and `??` to analyse it:
+
+```bash
+cap make build            # run command, capture stdout+stderr
+cap kubectl apply -f x.yaml
+cap python train.py
+
+??                        # analyse captured output (default prompt)
+?? why did this fail      # ask a specific question about it
+?? what's the stack trace pointing to
+```
+
+`cap` runs the command normally — output appears in your terminal as usual — and saves a copy to `~/.sysai/last_output`. The file is trimmed to the last 100 KB after the command finishes, so for very long output the AI sees the end (where errors appear), not the beginning.
+
+`??` pipes `~/.sysai/last_output` to sysai as stdin. Without a question it uses a default prompt asking the AI to explain the output and highlight errors. Both `cap` and `??` come from `shell.bash` / `shell.fish` — no sysai binary changes needed.
+
 ### `sysai chat` — persistent chat
 
 ```bash
@@ -54,7 +73,7 @@ sysai chat
 
 Interactive session with conversation history and session management.
 
-- **Inside tmux** — automatically splits your window: left pane stays as your terminal, right pane opens the chat. The AI can see your terminal output as context.
+- **Inside tmux** — automatically splits your window (38/62 split): left pane stays as your terminal, right pane opens the chat. The AI can see your terminal output as context.
 - **tmux available but not running** — automatically starts a new tmux session with the split layout.
 - **No tmux** — runs inline in the current terminal.
 
@@ -73,11 +92,14 @@ Use `sysai chat --inline` to always run inline.
 /status        — show token usage, turns, and session info
 /model [name]  — switch active model
 /instructions  — edit ~/.sysai/instructions.md
-/exit          — quit
+/exit  /quit   — quit
 /help          — show all commands
+Ctrl-D         — quit
 ```
 
-Sessions are auto-saved as you go, titled by the first question, and tracked per hostname. Up to 50 sessions are kept.
+You can also type shell commands directly at the prompt — safe read-only commands like `ls`, `ps`, `df`, `squeue`, etc. are recognised and run with approval, without going through the AI.
+
+Sessions are auto-saved as you go, titled by the first question, and tracked per hostname. The most recent 50 sessions are kept; `/sessions` shows the 20 most recent.
 
 ### `sysai <task>` — named tasks
 
@@ -519,7 +541,7 @@ Use `/status` to see current token usage and decide when to compact.
 | Tool | Approval | Description |
 |------|----------|-------------|
 | `bash` | ask user | Run any shell command. Output capped at 20k chars. |
-| `read_file` | auto | Read a file, optionally with `offset` and `limit` for chunked reading. |
+| `read_file` | auto | Read a file with optional `offset` and `limit` for chunked reading. Files over 10 MB are rejected. |
 | `write_file` | ask user | Create or overwrite a file. Shows a unified diff before prompting. |
 | `fetch_url` | auto | Fetch a URL as clean markdown via [Jina Reader](https://jina.ai/reader/). Raw files returned as-is. Capped at 50k chars. |
 | `github` | auto | Read files or list directories from public GitHub repos. Accepts any GitHub URL or `owner/repo[/path]` shorthand. |
@@ -532,11 +554,11 @@ Use `/status` to see current token usage and decide when to compact.
 
 - Hostname, user, cwd, shell, OS/distro
 - SSH connection info (`SSH_CONNECTION`)
-- SLURM job details (job ID, partition, node list, CPUs)
+- SLURM job details (job ID, name, partition, node list, CPUs)
 - Container detection (Docker, Singularity, Apptainer)
 - Sudo elevation (`SUDO_USER`)
 - Terminal buffer — last 60 lines from tmux (work pane, not chat pane)
-- Piped stdin (capped at 8k chars)
+- Piped stdin (capped at 8k chars, truncated symmetrically if longer)
 
 ---
 
@@ -587,14 +609,18 @@ npm run build    # outputs to dist/sysai-{darwin,linux}-{x64,arm64}
 │       ├── docs/       ← source files
 │       ├── index.json  ← processed text chunks
 │       └── vectors.json ← embeddings (optional)
-├── shell.bash         ← shell integration (? function)
+├── shell.bash         ← shell integration (?, cap, ?? functions)
+├── shell.fish         ← fish shell integration
+├── last_output        ← last cap output (overwritten each run)
 ├── instructions.md    ← optional: custom instructions for the AI
 ├── tasks/             ← task files (doctor.md, jobcheck.md, yours…)
 └── history/           ← saved chat sessions
 ```
 
-Plus one line added to `~/.bashrc` or `~/.zshrc`:
+Plus one block added to `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`:
 ```bash
+# bash/zsh:
+export PATH="$HOME/.sysai/bin:$PATH"
 [ -f ~/.sysai/shell.bash ] && source ~/.sysai/shell.bash
 ```
 
@@ -639,7 +665,7 @@ sysai --version            — print version
 
 ```bash
 rm -rf ~/.sysai
-# Remove the source line from ~/.bashrc or ~/.zshrc
+# Remove the sysai block from ~/.bashrc, ~/.zshrc, or ~/.config/fish/config.fish
 ```
 
 ---
@@ -679,7 +705,8 @@ sysai/
 │       ├── errors.ts          ← API error formatting
 │       └── render.ts          ← spinner, streaming markdown renderer, write diff
 ├── tasks/                     ← built-in tasks (doctor.md, jobcheck.md)
-├── shell.bash                 ← shell integration (? function)
+├── shell.bash                 ← shell integration (?, cap, ?? functions)
+├── shell.fish                 ← fish shell integration
 ├── build.sh                   ← cross-compile via bun
 └── tsconfig.json
 ```
@@ -688,7 +715,7 @@ sysai/
 
 ## Requirements
 
-- bash or zsh
+- bash, zsh, or fish
 - An API key for Anthropic or OpenAI, or a local model endpoint (Ollama, llama.cpp, OpenWebUI, etc.)
 - [bun](https://bun.sh) — only needed to run from source or build binaries
 - tmux (optional — enables split-pane chat and terminal buffer context)
